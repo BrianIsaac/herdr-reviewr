@@ -107,6 +107,44 @@ panes_json=$("$H" pane list --workspace "$ws" 2>/dev/null) && [ -n "$panes_json"
   printf '%s' "$panes_json" | jq -e '.result.panes' >/dev/null 2>&1 ||
   refuse "herdr pane list failed for $ws"
 
+# A pick is an independent session. Resolve only the focused live agent and leave the
+# legacy workspace sweep below untouched; an existing review never blocks or closes it.
+if [ "$mode" = pick ]; then
+  if [ -n "${HERDR_PLUGIN_CONTEXT_JSON:-}" ]; then
+    fp=$(printf '%s' "$HERDR_PLUGIN_CONTEXT_JSON" | jq -r '.focused_pane_id // empty' 2>/dev/null)
+    [ -z "$fp" ] || pane="$fp"
+  fi
+  [ -n "$pane" ] || refuse "no focused agent pane in $ws"
+  target=$(printf '%s' "$panes_json" | jq -ce --arg p "$pane" '
+    [.result.panes[] | select(.pane_id == $p)]
+    | select(length == 1) | .[0]
+    | select((.agent | type) == "string" and (.agent | length) > 0)' 2>/dev/null) ||
+    refuse "focused pane $pane is not a live agent"
+  # A pane can exit after listing. A missing/empty process group must refuse too.
+  info=$("$H" pane process-info --pane "$pane" 2>/dev/null) &&
+    printf '%s' "$info" | jq -e '.result.process_info.foreground_processes | type == "array" and length > 0' >/dev/null 2>&1 ||
+    refuse "focused pane $pane is no longer live"
+  live=$(printf '%s' "$target" | jq -r '.foreground_cwd // empty')
+  if [ -n "$live" ] && [ -d "$live" ]; then
+    cwd="$live"
+  elif [ -z "$cwd" ] || [ ! -d "$cwd" ]; then
+    cwd="$HOME"
+  fi
+  [ -d "$cwd" ] || refuse "no launch directory for picker"
+  project="${2:-${REVIEWR_PROJECT:-}}"
+  set -- --placement split --direction "$direction" --target-pane "$pane" --focus --env REVIEWR_PICK=1
+  [ -z "$project" ] || set -- "$@" --env "REVIEWR_PROJECT=$project"
+  [ -z "${REVIEWR_RUN:-}" ] || set -- "$@" --env "REVIEWR_RUN=$REVIEWR_RUN"
+  [ -z "${REVIEWR_SEND_TO:-}" ] || set -- "$@" --env "REVIEWR_SEND_TO=$REVIEWR_SEND_TO"
+  [ -z "${REVIEWR_BASE:-}" ] || set -- "$@" --env "REVIEWR_BASE=$REVIEWR_BASE"
+  open_json=$("$H" plugin pane open --plugin "${HERDR_PLUGIN_ID:-persiyanov.reviewr}" --entrypoint pane \
+    "$@" --cwd "$cwd" 2>/dev/null) || refuse "herdr plugin pane open failed"
+  new=$(printf '%s' "$open_json" | jq -r '.result.plugin_pane.pane.pane_id // empty' 2>/dev/null)
+  [ -n "$new" ] || refuse "herdr plugin pane open failed"
+  printf 'opened %s (split) in %s\n' "$new" "$ws"
+  exit 0
+fi
+
 # A reviewr pane runs the review UI in its foreground process group. A wrapped launch (`cargo run`) counts through its child; a flag run
 # (`--resolve-plugin-config`) never counts. The executable name in `argv0`/`argv[0]`
 # decides, never `name`: that field is a rewritable process title (docs/herdr-api-notes.md).

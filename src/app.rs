@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 
 use crate::diff::{DiffCache, FileDiff, Row, View};
-use crate::export::{Agent, ExportTarget, format_all};
+use crate::export::{Agent, ExportTarget, ReviewHeader, format_batch};
 use crate::file_list::{self, Annotation, Entry, RowKind};
 use crate::forge;
 use crate::git;
@@ -4769,7 +4769,15 @@ impl App {
             return false;
         }
         let refs: Vec<&Comment> = self.store.iter().collect();
-        let text = format_all(&refs);
+        // Read current branch only for selected sessions; never build a missing base diff.
+        let branch = self.review_identity.as_ref().and_then(|_| git::head_branch(&self.repo));
+        let header = self.review_identity.as_ref().map(|identity| ReviewHeader {
+            project: identity.project.as_deref(),
+            run: identity.run.as_deref(),
+            branch: branch.as_deref(),
+            base: self.branch_base.winner.as_ref().map(|base| (base.name(), base.oid())),
+        });
+        let text = format_batch(&refs, header.as_ref());
         let n = refs.len();
         logln!("export ({n}) -> {} ::\n{text}", target.label());
         let delivered = match target.export(&text) {

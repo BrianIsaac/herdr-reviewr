@@ -26,6 +26,7 @@ fn fake_herdr(dir: &Path) -> (PathBuf, PathBuf) {
                 "#!/bin/sh\n",
                 "dir='{dir}'\n",
                 "printf '%s\\n' \"$*\" >> '{log}'\n",
+                "printf '%s\\0' \"$@\" >> \"$dir/argv\"; printf '\\0' >> \"$dir/argv\"\n",
                 "case \"$*\" in\n",
                 "  'pane list'*)\n",
                 "    if [ -f \"$dir/panes.json\" ]; then cat \"$dir/panes.json\";\n",
@@ -40,6 +41,10 @@ fn fake_herdr(dir: &Path) -> (PathBuf, PathBuf) {
                 "  'plugin config-dir '*)\n",
                 "    if [ -f \"$dir/configdir-hang\" ]; then sleep 5; fi\n",
                 "    printf '%s\\n' \"$dir\" ;;\n",
+                "  'plugin pane open'*)\n",
+                "    if [ -f \"$dir/openfail\" ]; then exit 1; fi\n",
+                "    if [ -f \"$dir/openempty\" ]; then printf '%s\\n' '{{\"result\":{{}}}}';\n",
+                "    else printf '%s\\n' '{{\"result\":{{\"plugin_pane\":{{\"pane\":{{\"pane_id\":\"w1:p9\",\"tab_id\":\"w1:t9\"}}}}}}}}'; fi ;;\n",
                 "  *) printf '%s\\n' '{{\"result\":{{\"plugin_pane\":{{\"pane\":{{\"pane_id\":\"w1:p9\",\"tab_id\":\"w1:t9\"}}}}}}}}' ;;\n",
                 "esac\n",
             ),
@@ -154,7 +159,7 @@ fn invalid_config_refuses_manual_action_before_herdr_side_effects() {
     fs::write(dir.path().join("config.toml"), "theme = \"not-a-theme\"\n").unwrap();
     let (herdr, log) = fake_herdr(dir.path());
 
-    for mode in ["open", "close", "toggle"] {
+    for mode in ["open", "close", "toggle", "pick"] {
         let output = run(mode, dir.path(), &herdr);
         assert_eq!(output.status.code(), Some(1), "{mode}");
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -895,4 +900,262 @@ fn split_placement_open_renames_no_tab() {
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let calls = fs::read_to_string(&log).unwrap();
     assert!(!calls.contains("tab rename"), "{calls}");
+}
+
+fn pick_command(dir: &Path, herdr: &Path, context: &serde_json::Value) -> Command {
+    let mut command = Command::new("bash");
+    command
+        .args(["herdr/pane.sh", "pick"])
+        .env("HERDR_REVIEWR_BIN", reviewr_bin())
+        .env("HERDR_PLUGIN_CONFIG_DIR", dir)
+        .env("HERDR_BIN_PATH", herdr)
+        .env("HERDR_WORKSPACE_ID", "workspace-1")
+        .env("HERDR_PANE_ID", "w1:p1")
+        .env("HERDR_PLUGIN_CONTEXT_JSON", context.to_string())
+        .env_remove("HERDR_PLUGIN_ROOT");
+    for key in ["REVIEWR_PROJECT", "REVIEWR_RUN", "REVIEWR_PICK", "REVIEWR_SEND_TO", "REVIEWR_BASE"]
+    {
+        command.env_remove(key);
+    }
+    command
+}
+
+#[test]
+fn pick_opens_independent_split_at_context_agent_with_quoted_arguments() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path().join("cockpit ' with spaces");
+    fs::create_dir(&cwd).unwrap();
+    fs::write(
+        dir.path().join("config.toml"),
+        "toggle_placement = \"tab\"\ntoggle_direction = \"down\"\n",
+    )
+    .unwrap();
+    let (herdr, log) = fake_herdr(dir.path());
+    fs::write(
+        dir.path().join("panes.json"),
+        serde_json::json!({"result":{"panes":[
+            {"pane_id":"w1:p1"}, {"pane_id":"w1:p2", "agent":"codex", "foreground_cwd":cwd},
+            {"pane_id":"w1:p3"}
+        ]}})
+        .to_string(),
+    )
+    .unwrap();
+    for pane in ["w1:p1", "w1:p3"] {
+        procinfo(
+            dir.path(),
+            pane,
+            r#"{"argv0":"herdr-reviewr","argv":["herdr-reviewr","--pick"]}"#,
+        );
+    }
+    let context = serde_json::json!({"focused_pane_id":"w1:p2", "focused_pane_cwd":"/missing"});
+    let project = "project ' $(false) ; *";
+    for _ in 0..2 {
+        let output = pick_command(dir.path(), &herdr, &context)
+            .arg(project)
+            .env("REVIEWR_SEND_TO", "cockpit")
+            .env("REVIEWR_BASE", "refs/heads/main")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    }
+    let calls = fs::read_to_string(log).unwrap();
+    assert_eq!(calls.matches("plugin pane open").count(), 2);
+    assert!(!calls.contains("pane close") && !calls.contains("tab rename"));
+    assert!(
+        !calls.contains("process-info --pane w1:p1")
+            && !calls.contains("process-info --pane w1:p3")
+    );
+    let args = fs::read_to_string(dir.path().join("argv")).unwrap();
+    let expected = [
+        "plugin",
+        "pane",
+        "open",
+        "--plugin",
+        "persiyanov.reviewr",
+        "--entrypoint",
+        "pane",
+        "--placement",
+        "split",
+        "--direction",
+        "down",
+        "--target-pane",
+        "w1:p2",
+        "--focus",
+        "--env",
+        "REVIEWR_PICK=1",
+        "--env",
+        &format!("REVIEWR_PROJECT={project}"),
+        "--env",
+        "REVIEWR_SEND_TO=cockpit",
+        "--env",
+        "REVIEWR_BASE=refs/heads/main",
+        "--cwd",
+        cwd.to_str().unwrap(),
+    ]
+    .join("\0")
+        + "\0\0";
+    assert_eq!(args.matches(&expected).count(), 2, "{args:?}");
+    // The same non-repository cwd still refuses an ordinary open when no review exists.
+    fs::write(
+        dir.path().join("panes.json"),
+        serde_json::json!({"result":{"panes":[
+            {"pane_id":"w1:p2", "agent":"codex", "foreground_cwd":cwd}
+        ]}})
+        .to_string(),
+    )
+    .unwrap();
+    let output = run_with_context("open", dir.path(), &herdr, &context.to_string());
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("not a git repo"));
+}
+
+#[test]
+fn pick_refuses_missing_non_agent_dead_and_unreadable_targets_and_failed_opens() {
+    for case in [
+        "missing",
+        "non-agent",
+        "dead",
+        "empty-processes",
+        "bad-processes",
+        "openfail",
+        "openempty",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let (herdr, log) = fake_herdr(dir.path());
+        let agent =
+            if case == "non-agent" { serde_json::Value::Null } else { serde_json::json!("codex") };
+        fs::write(
+            dir.path().join("panes.json"),
+            serde_json::json!({"result":{"panes":[
+                {"pane_id":"w1:p1", "agent":agent}
+            ]}})
+            .to_string(),
+        )
+        .unwrap();
+        match case {
+            "dead" => fs::write(dir.path().join("procfail-w1:p1.json"), "pane_not_found").unwrap(),
+            "empty-processes" => procinfo(dir.path(), "w1:p1", ""),
+            "bad-processes" => fs::write(dir.path().join("procinfo-w1:p1.json"), "{}").unwrap(),
+            "openfail" | "openempty" => fs::write(dir.path().join(case), "").unwrap(),
+            _ => {}
+        }
+        let pane = if case == "missing" { "w1:absent" } else { "w1:p1" };
+        let output = pick_command(dir.path(), &herdr, &serde_json::json!({"focused_pane_id":pane}))
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{case}");
+        let calls = fs::read_to_string(log).unwrap();
+        assert!(!calls.contains("pane close"));
+        assert_eq!(
+            calls.matches("plugin pane open").count(),
+            usize::from(case.starts_with("open")),
+            "{case}: {calls}"
+        );
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let (herdr, log) = fake_herdr(dir.path());
+    let output = pick_command(dir.path(), &herdr, &serde_json::json!({}))
+        .env_remove("HERDR_PANE_ID")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(!fs::read_to_string(log).unwrap().contains("plugin pane open"));
+}
+
+#[test]
+fn pick_directory_fallback_and_environment_run_are_explicit() {
+    let dir = tempfile::tempdir().unwrap();
+    let (herdr, _) = fake_herdr(dir.path());
+    fs::write(
+        dir.path().join("panes.json"),
+        r#"{"result":{"panes":[{"pane_id":"w1:p1","agent":"codex","foreground_cwd":"/missing"}]}}"#,
+    )
+    .unwrap();
+    for context in [serde_json::json!({"focused_pane_cwd":dir.path()}), serde_json::json!({})] {
+        fs::write(dir.path().join("argv"), "").unwrap();
+        let output = pick_command(dir.path(), &herdr, &context)
+            .env("HOME", dir.path())
+            .env("REVIEWR_RUN", "run ' with spaces")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let args = fs::read_to_string(dir.path().join("argv")).unwrap();
+        assert!(args.contains("--env\0REVIEWR_RUN=run ' with spaces\0"));
+        assert!(args.contains(&format!("--cwd\0{}\0", dir.path().display())));
+    }
+}
+
+#[test]
+fn manifest_pick_preserves_contract_and_safely_maps_environment_to_supported_argv() {
+    let manifest: toml::Table = fs::read_to_string("herdr-plugin.toml").unwrap().parse().unwrap();
+    assert_eq!(manifest["id"].as_str(), Some("persiyanov.reviewr"));
+    assert_eq!(manifest["version"].as_str(), Some("0.36.2"));
+    assert_eq!(manifest["min_herdr_version"].as_str(), Some("0.7.5"));
+    let actions = manifest["actions"].as_array().unwrap();
+    assert_eq!(actions.len(), 4);
+    for name in ["open", "toggle", "close", "pick"] {
+        let action = actions.iter().find(|a| a["id"].as_str() == Some(name)).unwrap();
+        assert_eq!(
+            action["command"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["bash", "herdr/pane.sh", name]
+        );
+    }
+    let pane = &manifest["panes"].as_array().unwrap()[0];
+    assert_eq!(pane["id"].as_str(), Some("pane"));
+    let argv =
+        pane["command"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect::<Vec<_>>();
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("plugin ' root");
+    fs::create_dir_all(root.join("bin")).unwrap();
+    let bin = root.join("bin/herdr-reviewr");
+    fs::write(&bin, "#!/bin/sh\n[ \"$#\" -eq 0 ] || printf '%s\\0' \"$@\"\n").unwrap();
+    fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
+    for (envs, expected) in [
+        (vec![], vec![]),
+        (vec![("REVIEWR_PICK", "1")], vec!["--pick"]),
+        (
+            vec![
+                ("REVIEWR_PICK", "1"),
+                ("REVIEWR_PROJECT", "project ' $(false) *"),
+                ("REVIEWR_SEND_TO", "cockpit"),
+                ("REVIEWR_BASE", "main"),
+            ],
+            vec!["--project", "project ' $(false) *", "--send-to", "cockpit", "--base", "main"],
+        ),
+        (
+            vec![("REVIEWR_PICK", "1"), ("REVIEWR_RUN", "run with spaces")],
+            vec!["--run", "run with spaces"],
+        ),
+    ] {
+        let mut command = Command::new(argv[0]);
+        command.args(&argv[1..]).env("HERDR_PLUGIN_ROOT", &root);
+        for key in
+            ["REVIEWR_PICK", "REVIEWR_PROJECT", "REVIEWR_RUN", "REVIEWR_SEND_TO", "REVIEWR_BASE"]
+        {
+            command.env_remove(key);
+        }
+        let output = command.envs(envs).output().unwrap();
+        assert!(output.status.success());
+        let actual = String::from_utf8(output.stdout).unwrap();
+        assert_eq!(actual.split_terminator('\0').collect::<Vec<_>>(), expected);
+    }
+}
+
+#[test]
+fn picker_launches_still_count_as_review_ui_for_legacy_actions() {
+    let dir = tempfile::tempdir().unwrap();
+    let (herdr, log) = fake_herdr(dir.path());
+    procinfo(
+        dir.path(),
+        "w1:p1",
+        r#"{"argv0":"herdr-reviewr","argv":["herdr-reviewr","--pick","--send-to","cockpit"]}"#,
+    );
+    let output = run("open", dir.path(), &herdr);
+    assert!(output.status.success());
+    assert!(!fs::read_to_string(log).unwrap().contains("plugin pane open"));
 }

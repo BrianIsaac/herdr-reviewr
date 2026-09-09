@@ -1,6 +1,6 @@
 # Briain cockpit review flow
 
-Status: Tickets 1–2 implemented through sitting 4; export header and plugin action pending
+Status: Tickets 1–4 implemented through sitting 5; sitting 6 documentation and live acceptance pending
 Date: 2026-09-09
 
 ## Implementation progress
@@ -20,6 +20,10 @@ Date: 2026-09-09
   cross-workspace routing. CLI precedence survives rereads/recovery; the effective destination
   also labels Send. Each attempt requires one exact target and refuses visibly with clipboard
   fallback on failure or ambiguity. Existing paste/consume behavior and stock routing remain.
+- Sitting 5: selected sessions now export one contextual header through the shared comment
+  Send/Copy path; ordinary sessions retain body-only bytes and text selections stay literal.
+  The additive plugin `pick` action opens an independent focused split beside the focused
+  live agent, with quoted environment-to-argv mapping and fake-herdr coverage only.
 - Verification and measured latency: [sitting 2 handover](../../plans/progress/cockpit-fork-sitting-2-handover.md)
   and [sitting 3 handover](../../plans/progress/cockpit-fork-sitting-3-handover.md).
 
@@ -62,6 +66,41 @@ These mirror Ticket 2's acceptance criteria without revising the existing plan.
   upstream exact assertions remain intact. See the [sitting 4 handover](../../plans/progress/cockpit-fork-sitting-4-handover.md).
 - [ ] Operator-only live cockpit acceptance remains deferred to sitting 6. No real send,
   plugin install/link, pane action or machine-config edit occurred in sitting 4.
+
+### Ticket 3 acceptance progress
+
+These mirror Ticket 3's acceptance criteria without revising the existing plan.
+
+- [x] Pure tests pin the exact one-line shape, seven-character base OID, missing-value
+  placeholders, actual exported count, delimiter/control sanitization and no-identity parity.
+- [x] FakeTarget captures identical comment Copy/Send payloads; failed export retains all
+  comments, successful export consumes once, empty export calls no target, and selected-text
+  copying stays literal in an identity-bearing session.
+- [x] `tests/send_flow.rs` frames the header and body together once, strips embedded paste
+  terminators, sends no Enter and never retries after successful delivery, including focus failure.
+- [x] Header context comes from the selected session, actual HEAD branch and existing resolved
+  `branch_base.winner`; a missing base stays missing without an export-time diff build.
+- [x] Existing body-only and bare-session exact assertions remain unchanged; all 11 targeted
+  export/App/Send tests passed. Full `RUSTFLAGS='-D warnings' just ci` passed: 874 passed,
+  0 failed, 1 ignored in 558.416 seconds, including formatting, Clippy and release build.
+
+### Ticket 4 acceptance progress
+
+These mirror Ticket 4's acceptance criteria without revising the existing plan.
+
+- [x] Whole-file config validation precedes actions. Pick alone bypasses the repository cwd
+  guard; legacy action dispatch and its gates remain unchanged.
+- [x] Pick prefers the context's focused agent, verifies its live process group, forces the
+  configured split direction, focuses the new pane and passes explicit selector environment.
+  Missing/non-agent/dead/unreadable targets refuse without opening elsewhere.
+- [x] Existing reviews stay intact while repeated picks open independent sessions. Fake-herdr
+  tests cover multiple reviews, quoted cwd/id arguments, directory fallback and legacy actions.
+- [x] Parsed manifest tests retain identity/version/entrypoint/hooks and add `pick`; executing
+  its pane command against a fake binary proves safe expansion to supported flags. Explicit
+  project/run selectors suppress the picker hint; picker launches remain recognizable review UI.
+- [x] `bash -n herdr/pane.sh`, all 34 `pane_actions` tests and the full `-D warnings` gate
+  passed. No real herdr pane action was invoked. Measured outcomes and the exact sitting 6
+  scope are in the [sitting 5 handover](../../plans/progress/cockpit-fork-sitting-5-handover.md).
 
 ## Problem
 

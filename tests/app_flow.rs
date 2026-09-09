@@ -7424,3 +7424,58 @@ fn all_files_marks_the_run_and_lists_the_worktree() {
     assert_eq!(marked, ["three.rs"], "only the run's files carry a mark");
     assert!(app.entries.iter().any(|e| e.path == "root.rs"), "the tree lists the worktree");
 }
+
+#[test]
+fn contextual_export_copy_send_parity_failure_empty_and_current_context() {
+    let r = edited_repo();
+    let mut app = app_on(&r);
+    app.review_identity = Some(herdr_reviewr::pick::ReviewIdentity {
+        project: Some("project".into()),
+        run: Some("unrelated-run-name".into()),
+    });
+    comment_on(&mut app, '+', "one");
+    comment_on(&mut app, '-', "two");
+    let saved: Vec<_> = app.store.iter().cloned().collect();
+    let body = herdr_reviewr::export::format_all(&app.store.iter().collect::<Vec<_>>());
+    let branch = herdr_reviewr::git::head_branch(r.path()).unwrap();
+    assert!(app.branch_base.winner.is_none());
+    let copy = FakeTarget::failing();
+    assert!(!app.export(&copy));
+    assert_eq!(app.store.iter().cloned().collect::<Vec<_>>(), saved);
+    assert_eq!(
+        copy.last(),
+        format!("review: project | unrelated-run-name | {branch} | -@- | 2 comments\n\n{body}")
+    );
+    assert!(app.branch_base.winner.is_none(), "export must not resolve a missing base");
+    let send = FakeTarget::ok();
+    assert!(app.export(&send));
+    assert_eq!(copy.last(), send.last());
+    assert!(!app.export(&send));
+    assert_eq!(send.captured.borrow().len(), 1);
+
+    for c in saved {
+        app.store.add(c);
+    }
+    app.branch_base.winner = Some(herdr_reviewr::git::ResolvedBase::Rev {
+        spelling: "chosen-base".into(),
+        oid: "123456789abcdef".into(),
+    });
+    assert!(app.export(&send));
+    assert!(send.last().starts_with(&format!(
+        "review: project | unrelated-run-name | {branch} | chosen-base@1234567 | 2 comments\n\n"
+    )));
+}
+
+#[test]
+fn selected_session_text_copy_stays_literal() {
+    let r = selection_repo();
+    let mut app = app_on(&r);
+    app.review_identity =
+        Some(herdr_reviewr::pick::ReviewIdentity { project: Some("project".into()), run: None });
+    let (c0, r0) = sel_cell(&app, 0, 0);
+    let (c2, r2) = sel_cell(&app, 2, 2);
+    sel_mouse(&mut app, MouseEventKind::Down(MouseButton::Left), c0, r0);
+    sel_mouse(&mut app, MouseEventKind::Drag(MouseButton::Left), c2, r2);
+    sel_mouse(&mut app, MouseEventKind::Up(MouseButton::Left), c2, r2);
+    assert_eq!(last_copy().as_deref(), Some("alpha beta\n\tif x {\n日本"));
+}
