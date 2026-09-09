@@ -598,6 +598,7 @@ pub struct EditTarget {
 pub struct App {
     pub repo: PathBuf,
     pub review_identity: Option<crate::pick::ReviewIdentity>,
+    cli_send_to: Option<String>,
     pub base: Option<String>,
     /// The `branch` scope's base outcome, carried by the latest landed snapshot — the
     /// header names its winner (or the skip) and the diff builds against the winner's OID
@@ -867,6 +868,7 @@ impl App {
             repo,
             base,
             review_identity: None,
+            cli_send_to: None,
             branch_base: git::BaseStatus::default(),
             commit_pick: None,
             pick_status: None,
@@ -988,6 +990,18 @@ impl App {
     pub fn set_cli_theme(&mut self, name: Option<String>) {
         self.cli_theme_name = name;
         self.refresh_theme();
+    }
+
+    /// CLI Send override belongs to the launch session and survives config rereads.
+    pub fn set_cli_send_to(&mut self, target: Option<String>) {
+        self.cli_send_to = target;
+    }
+
+    /// The one effective destination used by dispatch and UI; None preserves stock Send.
+    pub fn send_destination(&self) -> Option<&str> {
+        self.cli_send_to
+            .as_deref()
+            .or_else(|| self.plugin_config().and_then(crate::config::PluginConfig::send_to))
     }
 
     /// Apply one complete validated plugin configuration snapshot.
@@ -4358,6 +4372,32 @@ impl App {
     pub fn send_to_agent(&mut self) {
         if self.store.is_empty() {
             self.status = "no comments to send".to_string();
+            return;
+        }
+        if let Some(destination) = self.send_destination() {
+            let target = herdr::SendTo::parse(destination);
+            let cockpit_dir = if target == herdr::SendTo::Cockpit {
+                let Ok(root) = crate::briain::data_root() else {
+                    self.status =
+                        "cockpit: data root unavailable — copy to the clipboard instead".into();
+                    return;
+                };
+                root.join("cockpit")
+            } else {
+                PathBuf::new()
+            };
+            match herdr::send_target_for(&target, &cockpit_dir) {
+                Ok(agent) => {
+                    self.export_to_agent(&agent);
+                    if !self.store.is_empty() {
+                        self.status = format!(
+                            "{}: delivery failed — copy to the clipboard instead",
+                            target.label()
+                        );
+                    }
+                }
+                Err(e) => self.status = e.to_string(),
+            }
             return;
         }
         match herdr::send_target() {

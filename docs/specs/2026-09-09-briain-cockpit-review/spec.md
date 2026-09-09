@@ -1,6 +1,6 @@
 # Briain cockpit review flow
 
-Status: Ticket 1 implemented through sitting 3; routing, export header and plugin action pending
+Status: Tickets 1–2 implemented through sitting 4; export header and plugin action pending
 Date: 2026-09-09
 
 ## Implementation progress
@@ -16,6 +16,10 @@ Date: 2026-09-09
   before App construction, baseline seeding or workers. Config repair and directory fallback
   preserve that boundary; later recovery carries the selected session. `--send-to` is parsed
   and retained only; routing remains ticket 2.
+- Sitting 4: optional whole-file `send_to` and the parsed `--send-to` now drive explicit
+  cross-workspace routing. CLI precedence survives rereads/recovery; the effective destination
+  also labels Send. Each attempt requires one exact target and refuses visibly with clipboard
+  fallback on failure or ambiguity. Existing paste/consume behavior and stock routing remain.
 - Verification and measured latency: [sitting 2 handover](../../plans/progress/cockpit-fork-sitting-2-handover.md)
   and [sitting 3 handover](../../plans/progress/cockpit-fork-sitting-3-handover.md).
 
@@ -37,6 +41,27 @@ These mirror Ticket 1's acceptance criteria without revising the existing plan.
   non-repo behavior and exact upstream fixtures remain unchanged.
 - [ ] Operator-only live pane acceptance: deferred to sitting 6. No installed plugin was rebuilt
   or pane opened during sitting 3.
+
+### Ticket 2 acceptance progress
+
+These mirror Ticket 2's acceptance criteria without revising the existing plan.
+
+- [x] `send_to` validates as one non-empty string; unknown/wrong-type/empty/control values
+  block the whole file. The 12-key allowlist, default/getter and normalized JSON stay in sync.
+- [x] CLI override survives startup, config reread and recovery; absence preserves
+  `send_target`, `candidates`, existing picker rows and turn sampling.
+- [x] Pure fixtures prove cockpit by cwd or name, deduplication, exact name/pane matches,
+  other workspaces, self/non-agent exclusion, absent and ambiguous targets.
+- [x] Explicit failures name the target and clipboard fallback, never choose another agent,
+  and retain every comment. Empty-store Send calls no herdr.
+- [x] Fake-herdr `send_flow` proves one paste to cockpit, no Enter, correct framing and
+  embedded-terminator stripping, failed enumeration/send retention, and focus-failure
+  consume-once behavior.
+- [x] App/recovery/display tests use the same effective destination as dispatch. Full
+  `RUSTFLAGS='-D warnings' just ci` passed: 866 passed, 0 failed, 1 ignored in 547.712 seconds;
+  upstream exact assertions remain intact. See the [sitting 4 handover](../../plans/progress/cockpit-fork-sitting-4-handover.md).
+- [ ] Operator-only live cockpit acceptance remains deferred to sitting 6. No real send,
+  plugin install/link, pane action or machine-config edit occurred in sitting 4.
 
 ## Problem
 

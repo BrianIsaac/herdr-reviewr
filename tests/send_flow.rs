@@ -238,3 +238,131 @@ fn send_dispatches_one_agent_directly_and_several_through_the_picker() {
     // to the log, so the sentence still fits a 40-column footer.
     assert_eq!(app.status, "herdr did not answer — copy to the clipboard instead");
 }
+
+#[test]
+fn explicit_send_resolves_once_refuses_safely_and_consumes_only_delivery() {
+    if env::var("EXPLICIT_SEND_FLOW_CHILD").is_err() {
+        let staging = tempfile::TempDir::new().unwrap();
+        let script = write_fake_herdr(staging.path());
+        let out = std::process::Command::new(env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "explicit_send_resolves_once_refuses_safely_and_consumes_only_delivery",
+                "--nocapture",
+            ])
+            .env("EXPLICIT_SEND_FLOW_CHILD", "1")
+            .env("FAKE_HERDR_DIR", staging.path())
+            .env("BRIAIN_DATA_DIR", staging.path())
+            .env("HERDR_BIN_PATH", script)
+            .env("HERDR_WORKSPACE_ID", "w8")
+            .env("HERDR_PANE_ID", "w8:p9")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(log(staging.path()).contains("pane send-text w9:pB"), "child must execute a send");
+        return;
+    }
+    let fake = PathBuf::from(env::var("FAKE_HERDR_DIR").unwrap());
+    let r = Repo::init();
+    r.write("a.rs", "alpha\n");
+    r.commit_all("init");
+    r.write("a.rs", "alpha\nbeta\n");
+    let mut app = app_on(&r);
+    let config_dir = tempfile::tempdir().unwrap();
+    let config_path = config_dir.path().join("config.toml");
+    fs::write(&config_path, "send_to = \"wrong-config-target\"\n").unwrap();
+    app.set_plugin_config(herdr_reviewr::config::plugin_config_in(config_dir.path()).unwrap());
+    app.set_cli_send_to(Some("cockpit".into()));
+    assert_eq!(app.send_destination(), Some("cockpit"));
+    app.send_to_agent();
+    assert_eq!(log(&fake), "", "empty export must not enumerate even with an explicit target");
+
+    // Another workspace, unnamed cockpit by the injected data root's cwd. The local
+    // workspace agent must never become an implicit fallback for the explicit request.
+    let cockpit = serde_json::json!({"agent":"claude", "agent_status":"idle", "pane_id":"w9:pB", "tab_id":"w9:t1", "workspace_id":"w9", "cwd":fake.join("cockpit")});
+    let local = serde_json::json!({"agent":"codex", "agent_status":"working", "pane_id":"w8:p1", "tab_id":"w8:t1", "workspace_id":"w8", "name":"local"});
+    let agents = serde_json::json!({"result":{"agents":[local, cockpit]}});
+    fs::write(fake.join("agents.json"), agents.to_string()).unwrap();
+    write_comment(&mut app, "before\u{1b}[201~after");
+    // Keep two independent comments to pin Comments survive to the entire store.
+    app.focus = Focus::Diff;
+    app.diff_cursor = app.visible.iter().position(|r| r.marker() == ' ').unwrap();
+    app.start_comment();
+    app.input = "second anchor".into();
+    app.submit_comment();
+    assert_eq!(app.store.len(), 2);
+    let body = herdr_reviewr::export::format_all(&app.store.iter().collect::<Vec<_>>());
+    let saved: Vec<_> = app.store.iter().cloned().collect();
+    for (failure, phrase, sends) in
+        [("agent list", "herdr did not answer", 0), ("pane send-text w9:pB", "delivery failed", 1)]
+    {
+        fs::write(fake.join("log"), "").unwrap();
+        fail_on(&fake, failure);
+        app.send_to_agent();
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.store.iter().cloned().collect::<Vec<_>>(), saved);
+        assert!(
+            app.status.contains("cockpit")
+                && app.status.contains(phrase)
+                && app.status.contains("clipboard"),
+            "{}",
+            app.status
+        );
+        let calls = log(&fake);
+        assert_eq!(calls.matches("agent list").count(), 1);
+        assert_eq!(calls.matches("pane send-text").count(), sends);
+        assert!(!calls.contains("agent focus") && !calls.contains("tab list"));
+    }
+    fail_on_nothing(&fake);
+    for (listing, phrase) in [
+        (serde_json::json!({"result":{"agents":[local]}}).to_string(), "no matching agent"),
+        (serde_json::json!({"result":{"agents":[cockpit, {"agent":"codex", "agent_status":"idle", "pane_id":"w7:p2", "tab_id":"w7:t1", "workspace_id":"w7", "name":"cockpit"}]}}).to_string(), "ambiguous (w9:pB, w7:p2)"),
+        ("invalid json".into(), "herdr did not answer"),
+    ] {
+        fs::write(fake.join("agents.json"), listing).unwrap();
+        fs::write(fake.join("log"), "").unwrap();
+        app.send_to_agent();
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.store.iter().cloned().collect::<Vec<_>>(), saved);
+        assert!(app.status.contains("cockpit") && app.status.contains(phrase) && app.status.contains("clipboard"), "{}", app.status);
+        assert_eq!(log(&fake), "agent list\n", "one resolution and no fallback");
+    }
+
+    fs::write(fake.join("agents.json"), agents.to_string()).unwrap();
+    fs::write(fake.join("log"), "").unwrap();
+    fail_on(&fake, "agent focus");
+    app.send_to_agent();
+    assert!(app.store.is_empty(), "focus failure cannot undo a successful paste");
+    assert_eq!(app.status, "added 2 comments to cockpit");
+    assert_eq!(app.last_sent_pane.as_deref(), Some("w9:pB"));
+    let expected = format!(
+        "agent list\npane send-text w9:pB \u{1b}[200~{}\u{1b}[201~\nagent focus w9:pB\n",
+        body.replace("\u{1b}[201~", "")
+    );
+    assert_eq!(log(&fake), expected, "one framed paste, one best-effort focus, no Enter or retry");
+    app.send_to_agent();
+    assert_eq!(log(&fake), expected, "consumed comments cannot send twice");
+
+    // Config-only routing and rereads use exactly the same destination as the UI getter.
+    fail_on_nothing(&fake);
+    app.set_cli_send_to(None);
+    for destination in ["local", "w9:pB"] {
+        fs::write(&config_path, format!("send_to = {destination:?}\n")).unwrap();
+        app.set_plugin_config(herdr_reviewr::config::plugin_config_in(config_dir.path()).unwrap());
+        assert_eq!(app.send_destination(), Some(destination));
+        fs::write(fake.join("log"), "").unwrap();
+        write_comment(&mut app, "config route");
+        app.send_to_agent();
+        assert!(app.store.is_empty());
+        let pane = if destination == "local" { "w8:p1" } else { "w9:pB" };
+        assert_eq!(app.status, format!("added 1 comment to {destination}"));
+        assert_eq!(log(&fake).matches("agent list").count(), 1);
+        assert!(log(&fake).contains(&format!("pane send-text {pane} \u{1b}[200~")));
+        assert!(!log(&fake).contains("send-keys"));
+    }
+}

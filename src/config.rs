@@ -15,7 +15,7 @@ pub struct Config {
     pub selector: Option<Selector>,
     pub selection: Option<crate::pick::Selection>,
     pub scope_override: Option<crate::model::Scope>,
-    /// Reserved for explicit Send routing; no consumer until ticket 2.
+    /// Explicit Send override; wins over the config file for the entire launch session.
     pub send_to: Option<String>,
     pub launch_error: Option<String>,
     pub poll: Duration,
@@ -60,6 +60,14 @@ impl Config {
                     }
                     let value = it.next_if(|v| !v.starts_with('-'));
                     match value {
+                        Some(value)
+                            if arg == "--send-to" && value.chars().any(char::is_control) =>
+                        {
+                            launch_error = Some(
+                                "--send-to requires a single-line value without control characters"
+                                    .into(),
+                            );
+                        }
                         Some(value) if !value.trim().is_empty() => match arg.as_str() {
                             "--project" => selector = Some(Selector::Project(value)),
                             "--run" => selector = Some(Selector::Run(value)),
@@ -112,7 +120,7 @@ impl Config {
     }
 }
 
-const PLUGIN_CONFIG_KEYS: [&str; 11] = [
+const PLUGIN_CONFIG_KEYS: [&str; 12] = [
     "theme",
     "default_scope",
     "navigator_position",
@@ -123,6 +131,7 @@ const PLUGIN_CONFIG_KEYS: [&str; 11] = [
     "gitlab_host",
     "azure_devops_host",
     "editor",
+    "send_to",
     "keybindings",
 ];
 
@@ -213,6 +222,7 @@ pub struct PluginConfig {
     gitlab_host: Option<String>,
     azure_devops_host: Option<String>,
     editor: Option<String>,
+    send_to: Option<String>,
     keymap: crate::keymap::Keymap,
 }
 
@@ -229,6 +239,7 @@ impl Default for PluginConfig {
             gitlab_host: None,
             azure_devops_host: None,
             editor: None,
+            send_to: None,
             keymap: crate::keymap::Keymap::default(),
         }
     }
@@ -287,6 +298,11 @@ impl PluginConfig {
         self.editor.as_deref()
     }
 
+    /// Explicit Send destination, resolved anew for each attempt.
+    pub fn send_to(&self) -> Option<&str> {
+        self.send_to.as_deref()
+    }
+
     /// The resolved keymap: the defaults with this snapshot's `[keybindings]` applied.
     pub fn keymap(&self) -> &crate::keymap::Keymap {
         &self.keymap
@@ -314,6 +330,7 @@ impl PluginConfig {
             "gitlab_host": self.gitlab_host,
             "azure_devops_host": self.azure_devops_host,
             "editor": self.editor,
+            "send_to": self.send_to,
             "keybindings": keybindings,
         })
     }
@@ -481,6 +498,21 @@ fn parse_plugin_config(path: &Path) -> Result<PluginConfig, PluginConfigError> {
     }
     if let Some(value) = table.get("azure_devops_host") {
         config.azure_devops_host = Some(parse_forge_host(path, "azure_devops_host", value)?);
+    }
+    if let Some(value) = table.get("send_to") {
+        config.send_to = Some(
+            value
+                .as_str()
+                .filter(|s| !s.trim().is_empty() && !s.chars().any(char::is_control))
+                .ok_or_else(|| {
+                    value_error(
+                        path,
+                        "send_to",
+                        "a non-empty single-line string without control characters",
+                    )
+                })?
+                .to_owned(),
+        );
     }
     if let Some(value) = table.get("editor") {
         let command = value
@@ -1134,6 +1166,46 @@ mod tests {
     }
 
     #[test]
+    fn send_to_cli_rejects_controls_without_positional_fallthrough() {
+        for value in ["a\nb", "a\rb", "a\tb", "a\u{1b}b", "a\u{7f}b"] {
+            let cfg = parse(&["/tmp/review", "--send-to", value]);
+            assert!(cfg.launch_error.as_deref().unwrap().contains("--send-to"));
+            assert_eq!(cfg.send_to, None);
+            assert_eq!(cfg.repo, std::path::Path::new("/tmp/review"));
+        }
+    }
+
+    #[test]
+    fn send_to_is_optional_exact_and_whole_file_validated() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        assert_eq!(PluginConfig::default().send_to(), None);
+        for target in ["cockpit", "release bot", "w8:p1", " exact "] {
+            std::fs::write(&path, format!("send_to = {target:?}\n")).unwrap();
+            let config = super::plugin_config_in(dir.path()).unwrap();
+            assert_eq!(config.send_to(), Some(target));
+            assert_eq!(config.to_json()["send_to"], target);
+        }
+        for invalid in [
+            "42",
+            "true",
+            "[]",
+            "{}",
+            "\"\"",
+            "\"   \"",
+            "\"a\\nb\"",
+            "\"a\\tb\"",
+            "\"a\\u001bb\"",
+            "\"a\\u007fb\"",
+        ] {
+            std::fs::write(&path, format!("theme = \"nord\"\nsend_to = {invalid}\n")).unwrap();
+            assert!(super::plugin_config_in(dir.path()).is_err(), "{invalid}");
+        }
+        std::fs::write(&path, "send_to = \"cockpit\"\nsend_too = \"other\"\n").unwrap();
+        assert!(super::plugin_config_in(dir.path()).is_err());
+    }
+
+    #[test]
     fn normalized_json_contains_every_key() {
         let value = PluginConfig::default().to_json();
         let object = value.as_object().unwrap();
@@ -1144,6 +1216,7 @@ mod tests {
         assert_eq!(object["toggle_direction"], "right");
         assert_eq!(object["auto_open"], true);
         assert!(object["github_host"].is_null());
+        assert!(object["send_to"].is_null());
         let keybindings = object["keybindings"].as_object().unwrap();
         assert_eq!(
             keybindings.len(),

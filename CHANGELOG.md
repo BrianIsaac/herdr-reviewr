@@ -17,13 +17,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   workers start. The chosen canonical checkout, base, scope and identity survive config
   recovery. Explicit bases win; runs start in Branch and projects keep the configured scope.
   New flags reject missing values and selector conflicts without treating ids as paths.
-  `--send-to <target>` is reserved and parsed; destination routing is not implemented yet.
+- **Explicit Send destination.** Optional `send_to` config and `--send-to <target>` route
+  comments to exactly one agent across workspaces. CLI wins through config rereads/recovery;
+  Send shows the effective destination. Targets match exact names or pane ids; `cockpit`
+  matches its name or the briain data root's cockpit directory. Failed or ambiguous lookup
+  refuses visibly with clipboard fallback and retains comments. Delivery remains one
+  bracketed paste without Enter, consumed on success even if focus fails. Unset targets
+  preserve the existing workspace Send and picker behavior.
 
 ### Documentation
 - **Briain cockpit fork workflow specified.** Added the implementation contract and six-sitting
   plan for project/run selection before startup, explicit cockpit routing, contextual review
-  export, a picker split action, and the local-build/upstream-rebase workflow. Routing,
-  export headers and the plugin action remain planned.
+  export, a picker split action, and the local-build/upstream-rebase workflow. Export headers
+  and the plugin action remain planned.
 
 ## [0.36.2] — 2026-08-29
 
