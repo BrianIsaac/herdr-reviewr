@@ -72,6 +72,88 @@ pub enum SendTarget {
     Many(Vec<AgentChoice>),
 }
 
+/// An explicit destination, independent of workspace Send candidates and turn sampling.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SendTo {
+    Cockpit,
+    Name(String),
+    Pane(String),
+}
+
+impl SendTo {
+    pub fn parse(value: &str) -> Self {
+        let pane_id = value.split_once(":p").is_some_and(|(ws, pane)| {
+            ws.strip_prefix('w')
+                .is_some_and(|ws| !ws.is_empty() && ws.bytes().all(|c| c.is_ascii_alphanumeric()))
+                && !pane.is_empty()
+                && pane.bytes().all(|c| c.is_ascii_alphanumeric())
+        });
+        if value == "cockpit" {
+            Self::Cockpit
+        } else if pane_id {
+            Self::Pane(value.to_owned())
+        } else {
+            Self::Name(value.to_owned())
+        }
+    }
+
+    pub fn label(&self) -> &str {
+        match self {
+            Self::Cockpit => "cockpit",
+            Self::Name(name) | Self::Pane(name) => name,
+        }
+    }
+}
+
+/// Resolve exactly once across all workspaces. Explicit requests never open the stock picker.
+pub fn send_target_for(target: &SendTo, cockpit_dir: &std::path::Path) -> Result<AgentChoice> {
+    let agents = agent_list().map_err(|e| {
+        logln!("explicit agent list failed: {e:#}");
+        anyhow::anyhow!("{}: herdr did not answer — copy to the clipboard instead", target.label())
+    })?;
+    let (_, me) = agent_env();
+    resolve_send_to(target, cockpit_dir, &agents, me.as_deref())
+}
+
+fn resolve_send_to(
+    target: &SendTo,
+    cockpit_dir: &std::path::Path,
+    agents: &[AgentPane],
+    me: Option<&str>,
+) -> Result<AgentChoice> {
+    let mut seen = std::collections::HashSet::new();
+    let matches: Vec<_> = agents
+        .iter()
+        .filter(|agent| agent.is_agent_other_than(me))
+        .filter(|agent| match target {
+            SendTo::Cockpit => {
+                agent.name.as_deref() == Some("cockpit")
+                    || agent
+                        .cwd
+                        .as_deref()
+                        .is_some_and(|cwd| std::path::Path::new(cwd) == cockpit_dir)
+            }
+            SendTo::Name(name) => agent.name.as_deref() == Some(name.as_str()),
+            SendTo::Pane(pane) => agent.pane_id == *pane,
+        })
+        .filter(|agent| seen.insert(agent.pane_id.as_str()))
+        .collect();
+    match matches.as_slice() {
+        [agent] => {
+            let mut choice = agent.choice(&HashMap::new());
+            // Success names the explicit destination, including cockpit found only by cwd.
+            target.label().clone_into(&mut choice.name);
+            Ok(choice)
+        }
+        [] => bail!("{}: no matching agent — copy to the clipboard instead", target.label()),
+        _ => bail!(
+            "{}: ambiguous ({}) — copy to the clipboard instead",
+            target.label(),
+            matches.iter().map(|a| a.pane_id.as_str()).collect::<Vec<_>>().join(", ")
+        ),
+    }
+}
+
 fn herdr_bin() -> String {
     env::var("HERDR_BIN_PATH").unwrap_or_else(|_| "herdr".to_string())
 }
@@ -475,6 +557,82 @@ mod tests {
         tabs: &HashMap<String, String>,
     ) -> Vec<AgentChoice> {
         super::candidates(agents, ws, me).into_iter().map(|agent| agent.choice(tabs)).collect()
+    }
+
+    #[test]
+    fn explicit_targets_parse_reserved_name_and_exact_pane_syntax() {
+        use super::SendTo;
+        assert_eq!(SendTo::parse("cockpit"), SendTo::Cockpit);
+        for pane in ["w8:p1", "wA:pB2"] {
+            assert_eq!(SendTo::parse(pane), SendTo::Pane(pane.into()));
+        }
+        for name in ["Cockpit", "release", "w:p1", "w8:p", "w8:p1-tail"] {
+            assert_eq!(SendTo::parse(name), SendTo::Name(name.into()));
+        }
+    }
+
+    #[test]
+    fn explicit_cockpit_matches_cwd_or_name_across_workspaces_and_deduplicates() {
+        use super::{SendTo, resolve_send_to};
+        let dir = std::path::Path::new("/data/cockpit");
+        let by_cwd =
+            || AgentPane { cwd: Some("/data/cockpit".into()), ..agent("w9:p1", "w9:t1", "w9") };
+        let by_name = || named("w9:p1", "w9:t1", "w9", Some("cockpit"));
+        for agents in [vec![by_cwd()], vec![by_name()], vec![by_cwd(), by_name()]] {
+            let result = resolve_send_to(&SendTo::Cockpit, dir, &agents, Some("w8:p9")).unwrap();
+            assert_eq!(result.pane_id, "w9:p1");
+            assert_eq!(result.name, "cockpit");
+        }
+    }
+
+    #[test]
+    fn explicit_matches_are_exact_and_exclude_self_and_non_agents() {
+        use super::{SendTo, resolve_send_to};
+        let dir = std::path::Path::new("/data/cockpit");
+        let agents = vec![
+            named("w9:p1", "w9:t1", "w9", Some("release")),
+            named("w9:p10", "w9:t1", "w9", Some("release-extra")),
+            named("w8:p9", "w8:t1", "w8", Some("release")),
+            AgentPane { name: Some("release".into()), ..non_agent_pane("w9:p3", "w9:t1", "w9") },
+        ];
+        for target in [SendTo::parse("release"), SendTo::parse("w9:p1")] {
+            assert_eq!(
+                resolve_send_to(&target, dir, &agents, Some("w8:p9")).unwrap().pane_id,
+                "w9:p1"
+            );
+        }
+        for target in ["Release", "releas", "w8:p9", "w9:p3", "w9:p", "cockpit"] {
+            let error = resolve_send_to(&SendTo::parse(target), dir, &agents, Some("w8:p9"))
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains(target)
+                    && error.contains("no matching agent")
+                    && error.contains("clipboard")
+            );
+        }
+        let near_cwd = vec![AgentPane {
+            cwd: Some("/data/cockpit-child".into()),
+            ..agent("w9:p1", "w9:t1", "w9")
+        }];
+        assert!(resolve_send_to(&SendTo::Cockpit, dir, &near_cwd, None).is_err());
+    }
+
+    #[test]
+    fn explicit_ambiguity_names_each_distinct_pane_and_never_picks_one() {
+        use super::{SendTo, resolve_send_to};
+        let agents = vec![
+            named("w8:p1", "w8:t1", "w8", Some("cockpit")),
+            named("w9:p1", "w9:t1", "w9", Some("cockpit")),
+            named("w9:p1", "w9:t1", "w9", Some("cockpit")),
+        ];
+        for target in [SendTo::Cockpit, SendTo::Name("cockpit".into())] {
+            let error =
+                resolve_send_to(&target, std::path::Path::new("/data/cockpit"), &agents, None)
+                    .unwrap_err()
+                    .to_string();
+            assert_eq!(error, "cockpit: ambiguous (w8:p1, w9:p1) — copy to the clipboard instead");
+        }
     }
 
     #[test]

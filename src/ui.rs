@@ -2557,7 +2557,14 @@ fn action_key_label(app: &App, action: FooterAction) -> (String, String) {
             ),
             "scope",
         ),
-        A::Send => return (hint(K::Send), format!("send {}", app.store.len())),
+        A::Send => {
+            let mut label = format!("send {}", app.store.len());
+            if let Some(destination) = app.send_destination() {
+                label.push_str(" to ");
+                label.push_str(destination);
+            }
+            return (hint(K::Send), label);
+        }
         A::List => (hint(K::Comments), "comments"),
         A::Copy => (hint(K::Copy), "copy"),
         A::Save => ("enter".into(), "save"),

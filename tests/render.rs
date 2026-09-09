@@ -3911,3 +3911,30 @@ fn a_row_shows_one_ref_by_what_matters_most() {
     let top = out.lines().skip(1).find(|l| l.contains(&shas[3][..7])).unwrap();
     assert!(top.contains("  pr ") && !top.contains("origin/feature"), "{top}");
 }
+
+#[test]
+fn explicit_send_destination_uses_effective_value_in_footer_and_help() {
+    let r = Repo::init();
+    r.write("a.rs", "alpha\n");
+    r.commit_all("init");
+    r.write("a.rs", "alpha\nbeta\n");
+    let mut app = app_on(&r);
+    app.focus = Focus::Diff;
+    app.diff_cursor = app.visible.iter().position(|r| r.marker() == '+').unwrap();
+    app.start_comment();
+    app.input = "review this".into();
+    app.submit_comment();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "send_to = \"configured\"\n").unwrap();
+    app.set_plugin_config(herdr_reviewr::config::plugin_config_in(dir.path()).unwrap());
+    for cli in [None, Some("cockpit"), Some("w9:pB")] {
+        app.set_cli_send_to(cli.map(str::to_owned));
+        for expanded in [false, true] {
+            app.keys_expanded = expanded;
+            let destination = app.send_destination().unwrap();
+            let out = render(&app);
+            assert!(out.contains(&format!("send 1 to {destination}")), "{out}");
+        }
+    }
+}

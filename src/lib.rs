@@ -450,6 +450,7 @@ fn app_for(cfg: &Config, initial_config: &Result<PluginConfig, config::PluginCon
                 cfg.base.clone(),
             );
             app.review_identity = cfg.selection.as_ref().map(|s| s.identity.clone());
+            app.set_cli_send_to(cfg.send_to.clone());
             app.set_config_error(error.to_string());
             app
         }
@@ -469,6 +470,7 @@ fn ready_app(cfg: &Config, plugin_config: PluginConfig) -> App {
     );
     let mut app = App::new(repo, scope, cfg.base.clone());
     app.review_identity = cfg.selection.as_ref().map(|s| s.identity.clone());
+    app.set_cli_send_to(cfg.send_to.clone());
     app.set_plugin_config(plugin_config);
     app.set_cli_theme(cfg.theme.clone());
     if let Some(wrap) = cfg.wrap {
@@ -3520,6 +3522,56 @@ mod refresh_tests {
             plugin_config_in(config_dir.path()),
         ));
         assert_eq!(epoch, 1);
+    }
+
+    #[test]
+    fn send_destination_cli_wins_on_startup_reread_and_recovery() {
+        for cli in [None, Some("cockpit")] {
+            let repo = tempfile::tempdir().unwrap();
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("config.toml");
+            std::fs::write(&path, "send_to = \"first\"\n").unwrap();
+            let mut cfg = Config::parse([repo.path().display().to_string()]);
+            cfg.send_to = cli.map(str::to_owned);
+            let mut app = ready_app(&cfg, plugin_config_in(dir.path()).unwrap());
+            assert_eq!(app.send_destination(), cli.or(Some("first")));
+            let (tx, rx) = mpsc::channel();
+            let mut epoch = 0;
+            let mut inflight = false;
+            std::fs::write(&path, "send_to = \"second\"\n").unwrap();
+            assert!(apply_plugin_config_observation(
+                &mut app,
+                &cfg,
+                &mut epoch,
+                &tx,
+                &mut inflight,
+                plugin_config_in(dir.path())
+            ));
+            assert_eq!(app.send_destination(), cli.or(Some("second")));
+            std::fs::write(&path, "send_to = 42\n").unwrap();
+            assert!(!apply_plugin_config_observation(
+                &mut app,
+                &cfg,
+                &mut epoch,
+                &tx,
+                &mut inflight,
+                plugin_config_in(dir.path())
+            ));
+            std::fs::write(&path, "send_to = \"repaired\"\n").unwrap();
+            assert!(!apply_plugin_config_observation(
+                &mut app,
+                &cfg,
+                &mut epoch,
+                &tx,
+                &mut inflight,
+                plugin_config_in(dir.path())
+            ));
+            let (_, _, mut recovered) =
+                rx.recv_timeout(Duration::from_secs(5)).expect("recovery worker");
+            assert_eq!(recovered.send_destination(), cli.or(Some("repaired")));
+            recovered.set_plugin_config(crate::config::PluginConfig::default());
+            assert_eq!(recovered.send_destination(), cli);
+        }
     }
 
     #[test]
