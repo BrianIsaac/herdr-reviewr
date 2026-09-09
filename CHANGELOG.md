@@ -25,11 +25,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bracketed paste without Enter, consumed on success even if focus fails. Unset targets
   preserve the existing workspace Send and picker behavior.
 
+- **Contextual review export.** Briain-selected sessions prepend one line naming project, run,
+  actual branch, resolved base and exported comment count to both comment Send and Copy.
+  Missing context has explicit placeholders; metadata is sanitized. Ordinary sessions keep
+  body-only exports, selected-text copy stays literal, and failed exports retain all comments.
+- **Plugin picker action.** `persiyanov.reviewr.pick` opens a new focused split beside the
+  focused live agent, including from a non-repository cockpit directory. Existing reviews
+  stay open; missing or dead targets refuse. The pane entrypoint safely maps project, run,
+  picker, Send destination and base environment values to supported flags.
+
 ### Documentation
 - **Briain cockpit fork workflow specified.** Added the implementation contract and six-sitting
   plan for project/run selection before startup, explicit cockpit routing, contextual review
-  export, a picker split action, and the local-build/upstream-rebase workflow. Export headers
-  and the plugin action remain planned.
+  export, a picker split action, and the local-build/upstream-rebase workflow. README/rebase
+  documentation and operator live acceptance remain deferred to sitting 6.
 
 ## [0.36.2] — 2026-08-29
 
