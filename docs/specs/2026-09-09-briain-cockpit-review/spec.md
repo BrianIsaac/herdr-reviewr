@@ -1,6 +1,6 @@
 # Briain cockpit review flow
 
-Status: Tickets 1–4 implemented through sitting 5; sitting 6 documentation and live acceptance pending
+Status: Tickets 1–4 implemented; Ticket 5 documentation/rehearsal complete; quiet-machine latency retake and post-merge operator acceptance pending
 Date: 2026-09-09
 
 ## Implementation progress
@@ -43,7 +43,7 @@ These mirror Ticket 1's acceptance criteria without revising the existing plan.
   modes without starting review workers; config recovery retains selection and CLI overrides.
 - [x] TestBackend covers narrow, tall, empty and unavailable picker frames; existing App
   non-repo behavior and exact upstream fixtures remain unchanged.
-- [ ] Operator-only live pane acceptance: deferred to sitting 6. No installed plugin was rebuilt
+- [ ] Operator-only live pane acceptance: deferred until after merge and primary-checkout rebuild. No installed plugin was rebuilt
   or pane opened during sitting 3.
 
 ### Ticket 2 acceptance progress
@@ -64,7 +64,7 @@ These mirror Ticket 2's acceptance criteria without revising the existing plan.
 - [x] App/recovery/display tests use the same effective destination as dispatch. Full
   `RUSTFLAGS='-D warnings' just ci` passed: 866 passed, 0 failed, 1 ignored in 547.712 seconds;
   upstream exact assertions remain intact. See the [sitting 4 handover](../../plans/progress/cockpit-fork-sitting-4-handover.md).
-- [ ] Operator-only live cockpit acceptance remains deferred to sitting 6. No real send,
+- [ ] Operator-only live cockpit acceptance remains deferred until after merge and primary-checkout rebuild. No real send,
   plugin install/link, pane action or machine-config edit occurred in sitting 4.
 
 ### Ticket 3 acceptance progress
@@ -101,6 +101,41 @@ These mirror Ticket 4's acceptance criteria without revising the existing plan.
 - [x] `bash -n herdr/pane.sh`, all 34 `pane_actions` tests and the full `-D warnings` gate
   passed. No real herdr pane action was invoked. Measured outcomes and the exact sitting 6
   scope are in the [sitting 5 handover](../../plans/progress/cockpit-fork-sitting-5-handover.md).
+
+### Ticket 5 acceptance progress
+
+These mirror Ticket 5 without editing the historical plan. The sitting 6 instruction
+limits rehearsal to targeted tests and runs one final full gate on this branch;
+live acceptance belongs to the operator after merge/rebuild.
+
+- [x] README covers registry and retained runs, selectors, base/scope/B policy, explicit
+  Send precedence/refusals, contextual header/placeholders, literal selection copying,
+  no automatic Enter and multi-review toggle/close behavior.
+- [x] Operator `persiyanov.reviewr.pick` binding documents `[keys] prefix = "ctrl+a"`
+  and `key = "prefix+d"`, verified against installed herdr 0.7.5's `--default-config`.
+  No operator keybinding/config was edited; the manifest does not install the binding.
+- [x] README and `docs/fork.md` document permanent-primary-checkout install/link/reopen,
+  executable-link verification and the upstream-download limitation.
+- [x] Rebase recipe records adopted boundary `4c09022`, clean prerequisite, fetch,
+  dated backup, pinned upstream replay, abort/recovery, range-diff, coupled file
+  surfaces, gate and operator rebuild. No rewritten-history push is implicit.
+- [x] Detached throwaway replay against fetched upstream/main completed without conflicts;
+  all 19 patches matched and final trees were identical. Upstream still equals the
+  adopted boundary, so this does not test future upstream overlaps. All 850 targeted
+  tests and shell syntax passed there; the clean throwaway was removed. Final source
+  `RUSTFLAGS='-D warnings' just ci` passed: 874 passed, 1 ignored, 505.300 seconds.
+  An initial stale cross-checkout test-cache failure was fixed by cleaning this
+  package's artifacts and rerunning the full gate; no test/source edits were needed.
+- [ ] Quiet-machine latency retake: another active regeneration/drawing job was present
+  at all three checks. The baseline remains untouched; no sitting 6 medians or
+  `chore(bench)` commit are claimed. See the handover for loads and old reference values.
+- [ ] Operator acceptance after merge/rebuild: Ctrl+A then d → astraweave → comment → s,
+  correct checkout/adjacent split, header/body in cockpit input without Enter, Copy
+  parity, retained run, absent/ambiguous target refusals and comment survival.
+  **None of these live checks is claimed passed by sitting 6.**
+
+See [rebase recipe/rehearsal](../../fork.md) and the
+[sitting 6 handover](../../plans/progress/cockpit-fork-sitting-6-handover.md).
 
 ## Problem
 
