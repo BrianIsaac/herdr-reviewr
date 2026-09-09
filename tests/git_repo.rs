@@ -1099,3 +1099,112 @@ fn the_commit_scope_writes_nothing() {
     );
     assert_eq!(before, after, "no ref, index, worktree, or HEAD change");
 }
+
+#[test]
+fn launch_base_prefers_local_main_over_master_tracking_and_divergent_origin() {
+    let repo = Repo::init();
+    repo.write("a", "initial");
+    repo.commit_all("initial");
+    let initial = repo.git(&["rev-parse", "HEAD"]).trim().to_string();
+    repo.git(&["branch", "master"]);
+    repo.set_origin_default("main", "HEAD");
+    repo.git(&["remote", "add", "origin", "https://example.invalid/repo.git"]);
+    repo.git(&["branch", "--set-upstream-to=origin/main", "main"]);
+    repo.write("a", "local main diverges");
+    repo.commit_all("local main");
+    let linked = repo.add_worktree("actual-feature");
+    repo.git(&["branch", "--set-upstream-to=origin/main", "actual-feature"]);
+    repo.git(&["tag", "actual-feature"]);
+    let before = repo.git(&["show-ref"]);
+    let index = std::fs::read(repo.path().join(".git/index")).unwrap();
+    assert_eq!(herdr_reviewr::git::head_branch(linked.path()).as_deref(), Some("actual-feature"));
+    assert_eq!(
+        herdr_reviewr::git::launch_base(linked.path()).unwrap().as_deref(),
+        Some("refs/heads/main")
+    );
+    assert_ne!(resolve_commit(linked.path(), "refs/heads/main").unwrap().unwrap(), initial);
+    assert_eq!(
+        resolve_commit(linked.path(), "refs/remotes/origin/main").unwrap().as_deref(),
+        Some(initial.as_str())
+    );
+    assert_eq!(repo.git(&["show-ref"]), before, "No writes: refs");
+    assert_eq!(std::fs::read(repo.path().join(".git/index")).unwrap(), index, "No writes: index");
+    assert!(read_base_pick(linked.path()).unwrap().is_none());
+}
+
+#[test]
+fn launch_base_master_only_precedes_tracking() {
+    let repo = Repo::init();
+    repo.write("a", "a");
+    repo.commit_all("initial");
+    repo.git(&["branch", "-m", "master"]);
+    repo.git(&["remote", "add", "origin", "https://example.invalid/repo.git"]);
+    repo.set_origin_default("other", "HEAD");
+    repo.git(&["branch", "--set-upstream-to=origin/other", "master"]);
+    assert_eq!(
+        herdr_reviewr::git::launch_base(repo.path()).unwrap().as_deref(),
+        Some("refs/heads/master")
+    );
+}
+
+#[test]
+fn launch_base_tracking_only_uses_configured_remote_full_ref() {
+    let repo = Repo::init();
+    repo.write("a", "a");
+    repo.commit_all("initial");
+    repo.git(&["branch", "-m", "topic"]);
+    repo.git(&["remote", "add", "team", "https://example.invalid/repo.git"]);
+    repo.git(&["update-ref", "refs/remotes/team/trunk", "HEAD"]);
+    repo.git(&["branch", "--set-upstream-to=team/trunk", "topic"]);
+    assert_eq!(
+        herdr_reviewr::git::launch_base(repo.path()).unwrap().as_deref(),
+        Some("refs/remotes/team/trunk")
+    );
+    // Tracking a local branch is also a configured upstream.
+    repo.git(&["branch", "trunk"]);
+    repo.git(&["branch", "--set-upstream-to=trunk", "topic"]);
+    assert_eq!(
+        herdr_reviewr::git::launch_base(repo.path()).unwrap().as_deref(),
+        Some("refs/heads/trunk")
+    );
+}
+
+#[test]
+fn launch_base_missing_and_dangling_upstream_leave_stock_fallback_and_pick_untouched() {
+    let repo = Repo::init();
+    repo.write("a", "a");
+    repo.commit_all("initial");
+    repo.git(&["branch", "-m", "topic"]);
+    repo.set_origin_default("trunk", "HEAD");
+    write_base_pick(repo.path(), "topic").unwrap();
+    let before = repo.git(&["show-ref"]);
+    let stock = resolve_base(repo.path(), None).unwrap();
+    assert_eq!(herdr_reviewr::git::launch_base(repo.path()).unwrap(), None);
+    assert_eq!(resolve_base(repo.path(), None).unwrap(), stock);
+    assert_eq!(repo.git(&["show-ref"]), before);
+    repo.git(&["remote", "add", "team", "https://example.invalid/repo.git"]);
+    repo.git(&["config", "branch.topic.remote", "team"]);
+    repo.git(&["config", "branch.topic.merge", "refs/heads/gone"]);
+    assert_eq!(herdr_reviewr::git::launch_base(repo.path()).unwrap(), None);
+    assert_eq!(resolve_base(repo.path(), None).unwrap(), stock);
+}
+
+#[test]
+fn launch_base_detached_unborn_and_no_rung_have_no_invented_branch() {
+    let repo = Repo::init();
+    assert_eq!(herdr_reviewr::git::head_branch(repo.path()), None);
+    assert_eq!(herdr_reviewr::git::launch_base(repo.path()).unwrap(), None);
+    repo.write("a", "a");
+    repo.commit_all("initial");
+    repo.git(&["checkout", "--detach", "-q"]);
+    assert_eq!(herdr_reviewr::git::head_branch(repo.path()), None);
+    assert_eq!(
+        herdr_reviewr::git::launch_base(repo.path()).unwrap().as_deref(),
+        Some("refs/heads/main")
+    );
+    repo.git(&["branch", "-D", "main"]);
+    assert_eq!(herdr_reviewr::git::launch_base(repo.path()).unwrap(), None);
+    repo.git(&["checkout", "-q", "-b", "no-rung"]);
+    assert_eq!(herdr_reviewr::git::head_branch(repo.path()).as_deref(), Some("no-rung"));
+    assert_eq!(herdr_reviewr::git::launch_base(repo.path()).unwrap(), None);
+}

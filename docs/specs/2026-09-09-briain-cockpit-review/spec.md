@@ -1,7 +1,20 @@
 # Briain cockpit review flow
 
-Status: Specified for implementation; no features shipped in sitting 1
+Status: Sitting 2 registry/base foundations implemented; startup picker and later features pending
 Date: 2026-09-09
+
+## Implementation progress
+
+- Sitting 1: specification and setup completed; no runtime features.
+- Sitting 2: `src/briain.rs` now discovers projects and retained worktrees from injectable
+  data roots, with bounded scalar parsing, availability reasons, duplicate refusal and
+  sanitized real-layout fixtures. Missing run metadata stays unknown. Git-only helpers
+  report actual HEAD branch and choose local main, local master, configured tracking ref,
+  or None without changing stock base resolution or writing private picks.
+- These are library foundations only: no selectors, picker UI, startup orchestration,
+  Send routing, contextual export or plugin action is active yet. Ticket 1 steps 3–5
+  remain sitting 3 work; the existing plan is unchanged.
+- Verification and measured latency: [sitting 2 handover](../../plans/progress/cockpit-fork-sitting-2-handover.md).
 
 ## Problem
 
