@@ -41,6 +41,9 @@ GitLab, or Azure DevOps and never posts.
 
 ## Install
 
+For the cockpit fork, use the [linked local build](#cockpit-build-and-update) below.
+The upstream prebuilt installation provides stock reviewr only:
+
 Prebuilt binaries, no Rust toolchain needed:
 
 ```bash
@@ -96,6 +99,122 @@ command = "persiyanov.reviewr.toggle"   # <plugin_id>.<action_id> — note the i
 ```
 
 `cmd+…` chords reach herdr. Many macOS terminals swallow `alt+…` themselves.
+
+## Cockpit review flow
+
+Focus the cockpit agent, press **Ctrl+A**, then **d**, and choose a registered project
+(such as `astraweave`) or a retained run. The `pick` action opens a new focused split
+beside that live agent, using `toggle_direction` (`right` or `down`). Each pick owns
+an independent review session; selection finishes before review starts. Missing,
+non-agent or dead split targets refuse. Generic `toggle` and `close` still sweep the
+focused workspace and can close **multiple reviews**, losing unexported comments.
+
+Discovery reads `BRIAIN_DATA_DIR`, defaulting to `$HOME/.local/share/briain` on Linux
+and macOS. Project registry entries are opening frontmatter in `notes/projects/*.md`
+with `id`, `status` and `working_dir`; active projects need a usable git checkout.
+Retained runs come from directories in `worktrees/`, joined by exact basename to
+`runs/<id>/job.yaml` (project) and `status.json` (lifecycle). Historical run records
+without a retained worktree are not reviewable. Missing metadata stays unknown;
+broken/pruned worktrees and invalid or duplicate project entries cannot silently
+select another checkout. Reviewr does not restore or create worktrees.
+
+```bash
+herdr-reviewr --pick
+herdr-reviewr --project astraweave --send-to cockpit
+herdr-reviewr --run <retained-run-id> --send-to cockpit
+```
+
+`--project` and `--run` require ids. Selectors conflict with each other and with a
+positional path; an invalid lookup reports its reason and returns to the picker.
+Esc cancels startup. A plain repository/path launch keeps stock behavior; a launch
+outside a repository enters the picker.
+
+For selected projects/runs, explicit `--base` wins, then the first resolvable local
+`refs/heads/main`, local `refs/heads/master`, or the branch's configured tracking ref
+(`@{upstream}`). If none resolves, stock private-base-pick then `origin/HEAD` fallback
+applies. “Tracking” does not mean a remote named `upstream`. An explicit or selected
+base disables `B` for that session. Runs start in **Branch** scope (commits plus WIP);
+projects use `default_scope`. Last turn still samples the selected worktree's agents.
+
+### Cockpit binding and Send
+
+This is an **operator binding**, not a manifest default. Merge these entries into
+herdr's `~/.config/herdr/config.toml`, replacing the stopgap `briain-reviewr` popup
+binding for the same key rather than adding a duplicate:
+
+```toml
+[keys]
+prefix = "ctrl+a"
+
+[[keys.command]]
+key = "prefix+d"
+type = "plugin_action"
+command = "persiyanov.reviewr.pick"
+```
+
+Prefix syntax was verified on 2026-09-09 against installed herdr 0.7.5's
+`herdr --default-config`: action bindings use `prefix+n` for a prefix sequence.
+The operator's existing binding uses `prefix+d`; no binding is installed by this fork.
+
+Split placement alone does not route comments. In **reviewr's** config file
+(`~/.config/herdr/plugins/config/persiyanov.reviewr/config.toml`), the operator can set:
+
+```toml
+send_to = "cockpit"
+```
+
+Send precedence is `--send-to <target>` over `send_to` over stock workspace routing,
+including after config rereads/recovery. Explicit targets match exactly one agent
+across all workspaces by name or pane id, excluding self and non-agents. Reserved
+`cockpit` matches agent name `cockpit` or cwd equal to the data root's `cockpit`
+directory, deduplicated by pane id. Absent, ambiguous or failed lookup refuses visibly,
+names the target (and ambiguous pane ids), and offers clipboard Copy; it never picks
+another agent automatically. Every comment survives refusal or failed delivery.
+
+Comment **Send** (`s`) and **Copy** (`y`) share the same batch in selected sessions:
+
+```text
+review: <project> | <run> | <branch> | <base>@<short oid> | <n> comments
+
+<existing comment blocks>
+```
+
+Missing project, run or actual HEAD branch uses `-` (also detached/unborn HEAD);
+unavailable base uses `-@-`. The base OID has seven characters. The count is the
+actual exported count. This is session/export context, not historical provenance
+for each surviving comment; without an existing Branch result, base stays missing.
+Metadata controls and delimiters are sanitized. Ordinary path sessions keep body-only
+exports, and selected-text copying remains **literal**, without a header.
+
+Send pastes the whole batch into the target's input with **no automatic Enter**;
+the operator reviews and submits it manually. Successful comment Send/Copy consumes
+the comments once; empty exports do nothing. Comments remain in memory by design.
+
+### Cockpit build and update
+
+After merging, build and link only the permanent primary checkout:
+
+```bash
+export PATH="$HOME/.cargo/bin:$PATH"
+cd /home/brian-isaac/Documents/personal/herdr-reviewr
+# Only when switching away from a downloaded plugin:
+herdr plugin uninstall persiyanov.reviewr
+just install
+herdr plugin link .
+herdr plugin list
+readlink -f ~/.local/bin/herdr-reviewr
+readlink -f ~/.local/state/herdr/plugins/persiyanov.reviewr/bin/herdr-reviewr
+```
+
+Verify the plugin source and executable links resolve to this primary checkout,
+never a disposable worktree. For subsequent updates, run `just install` there and
+refresh `herdr plugin link .` after manifest/action changes. Close and reopen review
+panes manually: existing processes keep the old binary, and refresh does not restart
+them. Export comments before closing. Do not automate pane reopens.
+
+`herdr/install.sh` still downloads upstream release assets. Neither the downloaded
+upstream plugin nor GitHub installation of this fork supplies these cockpit features.
+See [the upstream rebase recipe and rehearsal](docs/fork.md) for maintaining the fork.
 
 ## Controls
 
@@ -198,6 +317,10 @@ CLI flags on the pane command:
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
+| `--project <id>` | unset | select a registered project before startup |
+| `--run <id>` | unset | select a retained run; start in Branch scope |
+| `--pick` | off | open the project/run startup picker |
+| `--send-to <target>` | unset | explicit Send destination; overrides `send_to` |
 | `--poll <ms>` | `2000` | worktree poll interval (min `200`) |
 | `--base <ref>` | auto | base for `branch` scope, any rev, overrides the pick |
 | `--theme <name>` | `catppuccin` | UI + syntax theme (see below) |
@@ -232,6 +355,12 @@ select  = ["v", "ㅍ"]
 
 A missing file or omitted key uses its default. An invalid file is rejected whole — the pane
 shows the error and recovers on the next refresh after you fix it.
+
+### Send destination
+
+Optional `send_to = "cockpit"` (or an exact agent name/pane id) selects an explicit
+Send target. It must be a non-empty, single-line string. `--send-to` overrides it;
+omitting both preserves stock routing. See [Cockpit binding and Send](#cockpit-binding-and-send).
 
 ### Theme
 
@@ -426,8 +555,9 @@ The known constraints:
   says so, and **Send** still works.
 
 **herdr coupling**
-- **Send needs an agent in the workspace** — one agent takes the comments straight away, and
+- **Stock Send needs an agent in the workspace** — one agent takes the comments straight away, and
   several open a picker so you choose. With no agent, Send says so and keeps your comments.
+  Explicit `send_to` / `--send-to` instead resolves exactly one agent across workspaces.
 - **last turn relies on polling** (2 s default) — a turn that starts and finishes inside one
   poll is missed, and the scope shows everything since the last *observed* turn start, your
   own edits included.
