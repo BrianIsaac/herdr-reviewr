@@ -10,14 +10,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Briain registry and launch-base foundations.** Added read-only project/retained-run
   discovery with injectable data roots, bounded scalar parsing, availability reasons and
   real-layout fixtures. Added actual HEAD branch lookup and a launch-only local main →
-  local master → configured tracking-ref base preference. These helpers are not yet wired
-  into startup; the picker and selectors remain pending. Stock base resolution is unchanged.
+  local master → configured tracking-ref base preference. Stock base resolution is unchanged.
+- **Project and retained-run startup picker.** `--project <id>` and `--run <id>` resolve explicit
+  selections; `--pick` and non-repository launches open a two-level menu. Unavailable rows
+  explain their refusal, refresh preserves selection identity, and Esc cancels before review
+  workers start. The chosen canonical checkout, base, scope and identity survive config
+  recovery. Explicit bases win; runs start in Branch and projects keep the configured scope.
+  New flags reject missing values and selector conflicts without treating ids as paths.
+  `--send-to <target>` is reserved and parsed; destination routing is not implemented yet.
 
 ### Documentation
 - **Briain cockpit fork workflow specified.** Added the implementation contract and six-sitting
   plan for project/run selection before startup, explicit cockpit routing, contextual review
-  export, a picker split action, and the local-build/upstream-rebase workflow. The picker, routing,
-  export and plugin action remain planned; this entry does not announce them as shipped.
+  export, a picker split action, and the local-build/upstream-rebase workflow. Routing,
+  export headers and the plugin action remain planned.
 
 ## [0.36.2] — 2026-08-29
 

@@ -1,6 +1,6 @@
 # Briain cockpit review flow
 
-Status: Sitting 2 registry/base foundations implemented; startup picker and later features pending
+Status: Ticket 1 implemented through sitting 3; routing, export header and plugin action pending
 Date: 2026-09-09
 
 ## Implementation progress
@@ -11,10 +11,32 @@ Date: 2026-09-09
   sanitized real-layout fixtures. Missing run metadata stays unknown. Git-only helpers
   report actual HEAD branch and choose local main, local master, configured tracking ref,
   or None without changing stock base resolution or writing private picks.
-- These are library foundations only: no selectors, picker UI, startup orchestration,
-  Send routing, contextual export or plugin action is active yet. Ticket 1 steps 3–5
-  remain sitting 3 work; the existing plan is unchanged.
-- Verification and measured latency: [sitting 2 handover](../../plans/progress/cockpit-fork-sitting-2-handover.md).
+- Sitting 3: explicit parser arms reserve all four new flags without positional fallthrough.
+  The startup picker resolves canonical checkout/root, launch base, scope and review identity
+  before App construction, baseline seeding or workers. Config repair and directory fallback
+  preserve that boundary; later recovery carries the selected session. `--send-to` is parsed
+  and retained only; routing remains ticket 2.
+- Verification and measured latency: [sitting 2 handover](../../plans/progress/cockpit-fork-sitting-2-handover.md)
+  and [sitting 3 handover](../../plans/progress/cockpit-fork-sitting-3-handover.md).
+
+### Ticket 1 acceptance progress
+
+These mirror Ticket 1's acceptance criteria without revising the existing plan.
+
+- [x] Registry fixtures cover quoted/plain/null paths, description colons and embedded keys,
+  body keys, inactive/malformed/duplicate projects, missing registry and traversal ids.
+- [x] Worktrees are enumerated first; stray files are ignored; metadata is joined from the
+  specified files; unknown metadata stays unknown and pruned worktrees remain unavailable.
+- [x] Base tests cover the complete local-main/master/tracking chain, divergent refs,
+  detached/unborn HEAD and missing rungs; None preserves stock fallback and private refs.
+- [x] New flags cannot fall through to positional paths; explicit valid ids bypass input;
+  invalid lookups refuse visibly; ordinary repository paths retain stock base/scope/identity.
+- [x] Non-git startup chooses the root before App/workers; cancellation restores terminal
+  modes without starting review workers; config recovery retains selection and CLI overrides.
+- [x] TestBackend covers narrow, tall, empty and unavailable picker frames; existing App
+  non-repo behavior and exact upstream fixtures remain unchanged.
+- [ ] Operator-only live pane acceptance: deferred to sitting 6. No installed plugin was rebuilt
+  or pane opened during sitting 3.
 
 ## Problem
 
