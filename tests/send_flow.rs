@@ -348,6 +348,24 @@ fn explicit_send_resolves_once_refuses_safely_and_consumes_only_delivery() {
     app.send_to_agent();
     assert_eq!(log(&fake), expected, "consumed comments cannot send twice");
 
+    // Selected sessions frame the header and body together, with the same consume-once rule.
+    app.review_identity =
+        Some(herdr_reviewr::pick::ReviewIdentity { project: Some("project".into()), run: None });
+    write_comment(&mut app, "before\u{1b}[201~after");
+    let body = herdr_reviewr::export::format_all(&app.store.iter().collect::<Vec<_>>());
+    let branch = herdr_reviewr::git::head_branch(r.path()).unwrap();
+    fs::write(fake.join("log"), "").unwrap();
+    app.send_to_agent();
+    let expected = format!(
+        "agent list\npane send-text w9:pB \u{1b}[200~review: project | - | {branch} | -@- | 1 comments\n\n{}\u{1b}[201~\nagent focus w9:pB\n",
+        body.replace("\u{1b}[201~", "")
+    );
+    assert_eq!(log(&fake), expected);
+    assert!(app.store.is_empty());
+    app.send_to_agent();
+    assert_eq!(log(&fake), expected, "no Enter or retry after successful contextual paste");
+    app.review_identity = None;
+
     // Config-only routing and rereads use exactly the same destination as the UI getter.
     fail_on_nothing(&fake);
     app.set_cli_send_to(None);

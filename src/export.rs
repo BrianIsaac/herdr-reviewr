@@ -35,6 +35,47 @@ pub fn format_all(comments: &[&Comment]) -> String {
     sorted.iter().map(|c| format_comment(c)).collect::<Vec<_>>().join("\n\n")
 }
 
+/// Current session context, independent of each comment's historical anchor.
+#[derive(Clone, Debug, Default)]
+pub struct ReviewHeader<'a> {
+    pub project: Option<&'a str>,
+    pub run: Option<&'a str>,
+    pub branch: Option<&'a str>,
+    pub base: Option<(&'a str, &'a str)>,
+}
+
+/// Format one contextual batch; ordinary sessions retain the exact stock bytes.
+pub fn format_batch(comments: &[&Comment], header: Option<&ReviewHeader<'_>>) -> String {
+    let body = format_all(comments);
+    let Some(header) = header.filter(|_| !comments.is_empty()) else { return body };
+    let field = |value: Option<&str>| {
+        let clean: String = value
+            .unwrap_or("")
+            .chars()
+            .map(|c| {
+                if c.is_control() || matches!(c, '|' | '@' | '\u{2028}' | '\u{2029}') {
+                    ' '
+                } else {
+                    c
+                }
+            })
+            .collect();
+        if clean.trim().is_empty() { "-".to_string() } else { clean.trim().to_string() }
+    };
+    let (base, oid) = header.base.map_or((None, None), |(name, oid)| (Some(name), Some(oid)));
+    let short_oid: String = field(oid).chars().take(7).collect();
+    format!(
+        "review: {} | {} | {} | {}@{} | {} comments\n\n{}",
+        field(header.project),
+        field(header.run),
+        field(header.branch),
+        field(base),
+        short_oid,
+        comments.len(),
+        body
+    )
+}
+
 /// A destination comments can be exported to. Export succeeds or errors as a whole.
 pub trait ExportTarget {
     fn export(&self, text: &str) -> Result<()>;
@@ -153,6 +194,42 @@ mod tests {
         Agent, CLIPBOARD_TOOLS, Clipboard, ExportTarget, format_all, format_comment, select_tool,
     };
     use crate::model::{Comment, Side};
+
+    #[test]
+    fn contextual_batch_shape_missing_count_sanitization_and_stock_parity() {
+        use super::{ReviewHeader, format_batch};
+        let a = comment("a.rs", Side::New, 1, 1, "+x", "note");
+        let b = comment("b.rs", Side::New, 2, 2, "+y", "other");
+        let comments = [&b, &a];
+        let body = format_all(&comments);
+        assert_eq!(format_batch(&comments, None), body);
+        assert_eq!(
+            format_batch(&comments, Some(&ReviewHeader::default())),
+            format!("review: - | - | - | -@- | 2 comments\n\n{body}")
+        );
+        let header = ReviewHeader {
+            project: Some("project"),
+            run: Some("run"),
+            branch: Some("actual"),
+            base: Some(("refs/heads/main", "abcdef0123456789")),
+        };
+        assert_eq!(
+            format_batch(&comments, Some(&header)),
+            format!(
+                "review: project | run | actual | refs/heads/main@abcdef0 | 2 comments\n\n{body}"
+            )
+        );
+        assert_eq!(format_batch(&[], Some(&header)), "");
+        let header = ReviewHeader {
+            project: Some("a|b@c\n\r\t\u{1b}d"),
+            run: Some("\u{2028}\u{2029}"),
+            ..ReviewHeader::default()
+        };
+        assert_eq!(
+            format_batch(&[&a], Some(&header)),
+            "review: a b c    d | - | - | -@- | 1 comments\n\na.rs:1\n+x\nnote"
+        );
+    }
 
     #[test]
     fn clipboard_tool_selection_prefers_list_order_and_can_be_empty() {
