@@ -13,6 +13,8 @@ use std::time::Duration;
 pub struct Config {
     pub repo: PathBuf,
     pub selector: Option<Selector>,
+    pub selection: Option<crate::pick::Selection>,
+    pub scope_override: Option<crate::model::Scope>,
     /// Reserved for explicit Send routing; no consumer until ticket 2.
     pub send_to: Option<String>,
     pub launch_error: Option<String>,
@@ -92,6 +94,8 @@ impl Config {
         Self {
             repo,
             selector,
+            selection: None,
+            scope_override: None,
             send_to,
             launch_error,
             poll: Duration::from_millis(poll_ms.max(200)),
