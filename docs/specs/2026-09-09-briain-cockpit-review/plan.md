@@ -28,7 +28,7 @@ As in the existing spec folders, tickets are sections of this plan rather than d
 - [x] Time the first `just ci` on clean primary main before implementation; retain exact failure without fixing upstream.
 - [x] Uninstall downloaded plugin; run `just install` and link primary checkout; verify registry and executable links without pane opens/config edits.
 - [x] Write spec/plan covering all five features and add an explicitly planned Unreleased entry.
-- [ ] Commit `docs(spec): briain cockpit review flow`, then commit the versions/gate/link/next-step handover.
+- [x] Commit `docs(spec): briain cockpit review flow`, then commit the versions/gate/link/next-step handover.
 
 ## Ticket 1: select projects and retained runs before review startup
 
