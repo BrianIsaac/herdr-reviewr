@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Documentation
+- **Briain cockpit fork workflow specified.** Added the implementation contract and six-sitting
+  plan for project/run selection before startup, explicit cockpit routing, contextual review
+  export, a picker split action, and the local-build/upstream-rebase workflow. Runtime features
+  are planned; this entry does not announce them as shipped.
+
 ## [0.36.2] — 2026-08-29
 
 ### Fixed
