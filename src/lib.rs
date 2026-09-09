@@ -27,6 +27,7 @@ pub mod keymap;
 pub mod log;
 pub mod markdown;
 pub mod model;
+pub mod pick;
 pub mod proc;
 pub mod search;
 pub mod selection;
@@ -73,66 +74,41 @@ const RESOLVING_NOTE: &str = "resolving plugin config…";
 pub fn run() -> Result<()> {
     let mut cfg = Config::from_env();
     log::init();
-    // The config directory resolves once, at startup; every later read rereads only the
-    // file inside it. Only the environment names it here: the CLI
-    // fallback is a herdr subprocess, so it waits until after the first paint below —
-    // a wedged herdr must never hold the paint (issue #4).
-    cfg.plugin_config_dir = config::resolve_config_dir(|| None);
-    let mut initial_config = config::plugin_config(cfg.plugin_config_dir.as_deref());
-    let mut app = app_for(&cfg, &initial_config);
-
     let mut terminal = ratatui::init();
-    // The kitty keyboard protocol reports modifiers on keys the legacy encoding drops — most
-    // notably Ctrl/Alt+arrows — so word-jump by arrow works where the terminal supports it.
     let kbd = supports_keyboard_enhancement().unwrap_or(false);
     logln!("keyboard enhancement supported={kbd}");
-    // `ratatui::init` already claimed the alternate screen and raw mode, so only the input
-    // modes are left to claim here.
     claim_input_modes(kbd);
-    // Render before the first load, so a slow, failing, or hung `git` scan shows the reviewr UI
-    // instead of the blank pane herdr leaves when the process blocks or exits before it renders
-    // (issue #4). Paint the empty frame first; then the initial load, non-fatal — an error
-    // opens the pane with the reason in the status line, the same contract as a failed poll
-    // refresh.
+    // No App, baseline or review worker exists until both config and launch selection resolve.
+    let startup = (|| -> Result<Option<PluginConfig>> {
+        terminal.draw(|f| pick::render_startup(f, "starting reviewr…"))?;
+        cfg.plugin_config_dir = config::resolve_config_dir(|| None);
+        if cfg.plugin_config_dir.is_none() {
+            cfg.plugin_config_dir = herdr::plugin_config_dir_with(|| {
+                let _ = terminal.draw(|f| pick::render_startup(f, RESOLVING_NOTE));
+            })
+            .map(Into::into);
+        }
+        resolve_launch(&mut terminal, &mut cfg, briain::data_root, |timeout| {
+            if event::poll(timeout)? { Ok(Some(event::read()?)) } else { Ok(None) }
+        })
+    })();
+    let initial_config = match startup {
+        Ok(Some(config)) => Ok(config),
+        Ok(None) => {
+            restore_terminal(kbd);
+            return Ok(());
+        }
+        Err(error) => {
+            restore_terminal(kbd);
+            return Err(error);
+        }
+    };
+    let mut app = app_for(&cfg, &initial_config);
     if let Err(error) = terminal.draw(|f| ui::render(f, &app)) {
         restore_terminal(kbd);
         return Err(error.into());
     }
-    // The cosmetic pane label, stamped after the first paint and cleared on a normal exit
-    // Display only: identity is the process.
     herdr::label_pane();
-    // The CLI half of config-dir resolution, on a painted pane: with no environment
-    // directory, ask herdr and rebuild from the directory it names. Nothing user-held
-    // exists yet — the rebuild happens before the first load — and a wedged herdr
-    // degrades this pane to the defaults instead of holding herdr's blank grid
-    // (issue #4). A slow answer paints its note
-    // first, so the config swap is never a silent stale-then-swap; a fast one shows
-    // nothing (`policies/ux-responsiveness.md`).
-    let cli_dir = cfg
-        .plugin_config_dir
-        .is_none()
-        .then(|| {
-            herdr::plugin_config_dir_with(|| {
-                app.status = RESOLVING_NOTE.into();
-                let _ = terminal.draw(|f| ui::render(f, &app));
-            })
-        })
-        .flatten();
-    if let Some(dir) = cli_dir {
-        cfg.plugin_config_dir = Some(dir.into());
-        initial_config = config::plugin_config(cfg.plugin_config_dir.as_deref());
-        app = app_for(&cfg, &initial_config);
-        if let Err(error) = terminal.draw(|f| ui::render(f, &app)) {
-            restore_terminal(kbd);
-            herdr::clear_pane_label();
-            return Err(error.into());
-        }
-    }
-    // A slow lookup that then resolved nothing leaves its note behind; retract it.
-    if app.status == RESOLVING_NOTE {
-        app.status.clear();
-        let _ = terminal.draw(|f| ui::render(f, &app));
-    }
     if initial_config.is_ok()
         && let Err(e) = app.reload()
     {
@@ -142,6 +118,121 @@ pub fn run() -> Result<()> {
     let result = event_loop(&mut terminal, &mut app, &cfg, kbd);
     herdr::clear_pane_label();
     result
+}
+
+/// Terminal-free event injection keeps cancellation/config recovery testable without an App.
+fn resolve_launch<B: ratatui::backend::Backend>(
+    terminal: &mut ratatui::Terminal<B>,
+    cfg: &mut Config,
+    data_root: impl Fn() -> Result<std::path::PathBuf>,
+    mut read_event: impl FnMut(Duration) -> Result<Option<Event>>,
+) -> Result<Option<PluginConfig>>
+where
+    B::Error: std::error::Error + Send + Sync + 'static,
+{
+    let mut picker = None;
+    let mut attempted_explicit = false;
+    loop {
+        let observed = config::plugin_config(cfg.plugin_config_dir.as_deref());
+        let blocked =
+            cfg.launch_error.clone().or_else(|| observed.as_ref().err().map(ToString::to_string));
+        if let Some(error) = &blocked {
+            terminal.draw(|f| {
+                pick::render_startup(
+                    f,
+                    &format!("{error}\nFix config or relaunch with valid flags · Esc cancels"),
+                );
+            })?;
+        } else {
+            let plugin = observed.as_ref().expect("validated config");
+            if cfg.selection.is_some()
+                || (cfg.selector.is_none() && git::toplevel(&cfg.repo).is_some())
+            {
+                return Ok(Some(plugin.clone()));
+            }
+            if picker.is_none() {
+                terminal
+                    .draw(|f| pick::render_startup(f, "discovering projects and retained runs…"))?;
+                let scanned = data_root().and_then(|root| pick::Picker::scan(&root));
+                picker = Some(match scanned {
+                    Ok(picker) => picker,
+                    Err(error) => {
+                        let mut picker = pick::Picker::new(vec![], vec![]);
+                        picker.status = error.to_string();
+                        picker
+                    }
+                });
+            }
+            let menu = picker.as_mut().expect("scanned menu");
+            if !attempted_explicit {
+                attempted_explicit = true;
+                if let Some(selector @ (config::Selector::Project(_) | config::Selector::Run(_))) =
+                    &cfg.selector
+                {
+                    match menu.explicit(selector).and_then(|chosen| apply_selection(cfg, &chosen)) {
+                        Ok(()) => return Ok(Some(plugin.clone())),
+                        Err(error) => menu.status = error.to_string(),
+                    }
+                }
+            }
+            let palette = theme::resolve(cfg.theme.as_deref().or(Some(plugin.theme()))).palette;
+            terminal.draw(|f| menu.render_with_keys(f, &palette, plugin.keymap()))?;
+        }
+        let Some(input) = read_event(Duration::from_millis(200))? else {
+            continue;
+        };
+        if let Event::Key(key) = input
+            && key.kind != KeyEventKind::Release
+            && (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL)
+                || blocked.is_some() && key.code == KeyCode::Esc)
+        {
+            return Ok(None);
+        }
+        if blocked.is_some() {
+            continue;
+        }
+        // A config edit during the input wait gates the action too, not only the next paint.
+        let fresh = config::plugin_config(cfg.plugin_config_dir.as_deref());
+        if fresh.as_ref().ok() != observed.as_ref().ok() {
+            continue;
+        }
+        let menu = picker.as_mut().expect("menu awaiting input");
+        let plugin = observed.as_ref().expect("validated config");
+        match menu.input(&input, terminal.size()?.into(), plugin.keymap()) {
+            pick::Input::Outcome(pick::Outcome::Selected(chosen)) => {
+                match apply_selection(cfg, &chosen) {
+                    Ok(()) => return Ok(Some(plugin.clone())),
+                    Err(error) => menu.status = error.to_string(),
+                }
+            }
+            pick::Input::Outcome(pick::Outcome::Cancelled) => return Ok(None),
+            pick::Input::Rescan => {
+                match data_root()
+                    .and_then(|root| Ok((briain::projects(&root)?, briain::runs(&root)?)))
+                {
+                    Ok((projects, runs)) => {
+                        menu.reconcile(projects, runs);
+                        menu.status.clear();
+                    }
+                    Err(error) => menu.status = error.to_string(),
+                }
+            }
+            pick::Input::Outcome(pick::Outcome::Continue) => {}
+        }
+    }
+}
+
+fn apply_selection(cfg: &mut Config, chosen: &pick::Selection) -> Result<()> {
+    let chosen = chosen.revalidate()?;
+    let base = match &cfg.base {
+        Some(base) => Some(base.clone()),
+        None => git::launch_base(&chosen.root).map_err(|error| anyhow::anyhow!(error.0))?,
+    };
+    cfg.repo.clone_from(&chosen.root);
+    cfg.base = base;
+    cfg.scope_override = chosen.identity.run.as_ref().map(|_| Scope::Branch);
+    cfg.selection = Some(chosen);
+    Ok(())
 }
 
 /// Claim the input modes the event loop reads, on a screen something else already owns.
@@ -339,7 +430,11 @@ fn invalidate_screen(terminal: &mut DefaultTerminal) -> Result<()> {
 /// A non-repo path is not an error — the pane opens to an empty state and starts showing
 /// changes if the directory becomes a repo.
 fn repo_root(cfg: &Config) -> std::path::PathBuf {
-    git::toplevel(&cfg.repo).unwrap_or_else(|| cfg.repo.clone())
+    if cfg.selection.is_some() {
+        cfg.repo.clone()
+    } else {
+        git::toplevel(&cfg.repo).unwrap_or_else(|| cfg.repo.clone())
+    }
 }
 
 /// The startup app for one config snapshot: ready on `Ok`, blocked with the error on
@@ -349,7 +444,12 @@ fn app_for(cfg: &Config, initial_config: &Result<PluginConfig, config::PluginCon
     match initial_config {
         Ok(plugin_config) => ready_app(cfg, plugin_config.clone()),
         Err(error) => {
-            let mut app = App::blocked(repo_root(cfg), Scope::Uncommitted, cfg.base.clone());
+            let mut app = App::blocked(
+                repo_root(cfg),
+                cfg.scope_override.unwrap_or(Scope::Uncommitted),
+                cfg.base.clone(),
+            );
+            app.review_identity = cfg.selection.as_ref().map(|s| s.identity.clone());
             app.set_config_error(error.to_string());
             app
         }
@@ -359,7 +459,7 @@ fn app_for(cfg: &Config, initial_config: &Result<PluginConfig, config::PluginCon
 /// Build a fresh working reviewr pane only after the plugin configuration has validated.
 fn ready_app(cfg: &Config, plugin_config: PluginConfig) -> App {
     let repo = repo_root(cfg);
-    let scope = plugin_config.default_scope();
+    let scope = cfg.scope_override.unwrap_or_else(|| plugin_config.default_scope());
     logln!(
         "start repo={} poll={:?} base={:?} scope={}",
         repo.display(),
@@ -368,6 +468,7 @@ fn ready_app(cfg: &Config, plugin_config: PluginConfig) -> App {
         scope.name()
     );
     let mut app = App::new(repo, scope, cfg.base.clone());
+    app.review_identity = cfg.selection.as_ref().map(|s| s.identity.clone());
     app.set_plugin_config(plugin_config);
     app.set_cli_theme(cfg.theme.clone());
     if let Some(wrap) = cfg.wrap {
@@ -3568,3 +3669,6 @@ mod refresh_tests {
         assert_eq!(recovered.plugin_config().unwrap().theme(), "gruvbox");
     }
 }
+
+#[cfg(test)]
+mod startup_tests;

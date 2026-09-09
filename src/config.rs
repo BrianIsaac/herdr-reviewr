@@ -12,6 +12,12 @@ use std::time::Duration;
 #[derive(Clone, Debug)]
 pub struct Config {
     pub repo: PathBuf,
+    pub selector: Option<Selector>,
+    pub selection: Option<crate::pick::Selection>,
+    pub scope_override: Option<crate::model::Scope>,
+    /// Reserved for explicit Send routing; no consumer until ticket 2.
+    pub send_to: Option<String>,
+    pub launch_error: Option<String>,
     pub poll: Duration,
     pub base: Option<String>,
     pub theme: Option<String>,
@@ -20,6 +26,14 @@ pub struct Config {
     /// The plugin config directory, resolved once at startup by [`resolve_config_dir`];
     /// every later config read rereads only the file inside it.
     pub plugin_config_dir: Option<PathBuf>,
+}
+
+/// Startup intent, resolved before a review App exists.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Selector {
+    Project(String),
+    Run(String),
+    Pick,
 }
 
 impl Config {
@@ -33,9 +47,31 @@ impl Config {
         let mut base: Option<String> = None;
         let mut theme: Option<String> = None;
         let mut wrap: Option<bool> = None;
-        let mut it = args.into_iter();
+        let mut selector = None;
+        let mut send_to = None;
+        let mut launch_error = None;
+        let mut selector_count = 0;
+        let mut it = args.into_iter().peekable();
         while let Some(arg) = it.next() {
             match arg.as_str() {
+                "--project" | "--run" | "--send-to" => {
+                    if arg != "--send-to" {
+                        selector_count += 1;
+                    }
+                    let value = it.next_if(|v| !v.starts_with('-'));
+                    match value {
+                        Some(value) if !value.trim().is_empty() => match arg.as_str() {
+                            "--project" => selector = Some(Selector::Project(value)),
+                            "--run" => selector = Some(Selector::Run(value)),
+                            _ => send_to = Some(value),
+                        },
+                        _ => launch_error = Some(format!("{arg} requires a non-empty value")),
+                    }
+                }
+                "--pick" => {
+                    selector_count += 1;
+                    selector = Some(Selector::Pick);
+                }
                 "--poll" => {
                     if let Some(v) = it.next() {
                         poll_ms = v.parse().unwrap_or(poll_ms);
@@ -48,10 +84,20 @@ impl Config {
                 _ => {}
             }
         }
+        if selector_count > 1 {
+            launch_error = Some("use only one of --project, --run and --pick".into());
+        } else if selector_count > 0 && repo.is_some() {
+            launch_error = Some("a selector cannot be combined with a repository path".into());
+        }
         let repo =
             repo.or_else(|| std::env::current_dir().ok()).unwrap_or_else(|| PathBuf::from("."));
         Self {
             repo,
+            selector,
+            selection: None,
+            scope_override: None,
+            send_to,
+            launch_error,
             poll: Duration::from_millis(poll_ms.max(200)),
             base,
             theme,

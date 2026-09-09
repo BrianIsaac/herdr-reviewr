@@ -597,6 +597,7 @@ pub struct EditTarget {
 #[derive(Debug)]
 pub struct App {
     pub repo: PathBuf,
+    pub review_identity: Option<crate::pick::ReviewIdentity>,
     pub base: Option<String>,
     /// The `branch` scope's base outcome, carried by the latest landed snapshot — the
     /// header names its winner (or the skip) and the diff builds against the winner's OID
@@ -865,6 +866,7 @@ impl App {
         Self {
             repo,
             base,
+            review_identity: None,
             branch_base: git::BaseStatus::default(),
             commit_pick: None,
             pick_status: None,
