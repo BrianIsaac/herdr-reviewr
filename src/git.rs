@@ -1251,6 +1251,45 @@ pub fn head_oid(repo: &Path) -> Option<String> {
     git_line(repo, &["rev-parse", "--verify", "-q", "HEAD"])
 }
 
+/// Actual checked-out branch name, absent for detached or unborn HEAD.
+/// Use the full symbolic ref internally so a same-named tag cannot change the answer.
+pub fn head_branch(repo: &Path) -> Option<String> {
+    head_oid(repo)?;
+    let reference = git_line(repo, &["symbolic-ref", "--quiet", "HEAD"])?;
+    reference.strip_prefix("refs/heads/").map(str::to_string)
+}
+
+/// Read-only base preference for a briain launch, before App construction.
+/// Call only when no explicit base was supplied. None leaves the stock resolver's
+/// private pick / origin-HEAD fallback intact. Return dynamic full refs, not pinned OIDs.
+pub fn launch_base(repo: &Path) -> Result<Option<String>, GitFail> {
+    for reference in ["refs/heads/main", "refs/heads/master"] {
+        if resolve_commit(repo, reference)?.is_some() {
+            return Ok(Some(reference.into()));
+        }
+    }
+    let Some(branch) = head_branch(repo) else {
+        return Ok(None);
+    };
+    let branch_ref = format!("refs/heads/{branch}");
+    // for-each-ref reports an empty upstream for unconfigured tracking and the full
+    // ref even when its target is gone; rev-parse @{upstream} treats those as fatal.
+    let refs =
+        git_strict(repo, &["for-each-ref", "--format=%(refname)\t%(upstream)", &branch_ref])?;
+    let Some(upstream) =
+        refs.lines().filter_map(|line| line.split_once('\t')).find_map(|(name, upstream)| {
+            (name == branch_ref && !upstream.is_empty()).then_some(upstream)
+        })
+    else {
+        return Ok(None);
+    };
+    if upstream.starts_with("refs/") && resolve_commit(repo, upstream)?.is_some() {
+        Ok(Some(upstream.to_string()))
+    } else {
+        Ok(None)
+    }
+}
+
 /// `sha`'s subject line, for the header paint.
 pub fn commit_subject(repo: &Path, sha: &str) -> Option<String> {
     git_line(repo, &["log", "-1", "--format=%s", sha])
