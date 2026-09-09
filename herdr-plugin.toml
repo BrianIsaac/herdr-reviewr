@@ -21,7 +21,17 @@ command = ["bash", "herdr/install.sh"]
 id = "pane"
 title = "reviewr"
 placement = "split"
-command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/bin/herdr-reviewr\""]
+command = ["sh", "-c", '''
+set --
+[ -z "${REVIEWR_PROJECT:-}" ] || set -- "$@" --project "$REVIEWR_PROJECT"
+[ -z "${REVIEWR_RUN:-}" ] || set -- "$@" --run "$REVIEWR_RUN"
+if [ "${REVIEWR_PICK:-}" = 1 ] && [ -z "${REVIEWR_PROJECT:-}" ] && [ -z "${REVIEWR_RUN:-}" ]; then
+  set -- "$@" --pick
+fi
+[ -z "${REVIEWR_SEND_TO:-}" ] || set -- "$@" --send-to "$REVIEWR_SEND_TO"
+[ -z "${REVIEWR_BASE:-}" ] || set -- "$@" --base "$REVIEWR_BASE"
+exec "$HERDR_PLUGIN_ROOT/bin/herdr-reviewr" "$@"
+''']
 
 [[actions]]
 id = "toggle"
@@ -40,6 +50,12 @@ id = "close"
 title = "reviewr: close pane"
 contexts = ["pane", "workspace"]
 command = ["bash", "herdr/pane.sh", "close"]
+
+[[actions]]
+id = "pick"
+title = "reviewr: pick project or run"
+contexts = ["pane", "workspace"]
+command = ["bash", "herdr/pane.sh", "pick"]
 
 # Auto-open a reviewr pane when a worktree workspace is born (gated by auto_open; see herdr/pane.sh).
 [[events]]
