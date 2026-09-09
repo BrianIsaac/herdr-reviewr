@@ -24,7 +24,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   refuses visibly with clipboard fallback and retains comments. Delivery remains one
   bracketed paste without Enter, consumed on success even if focus fails. Unset targets
   preserve the existing workspace Send and picker behavior.
-
 - **Contextual review export.** Briain-selected sessions prepend one line naming project, run,
   actual branch, resolved base and exported comment count to both comment Send and Copy.
   Missing context has explicit placeholders; metadata is sanitized. Ordinary sessions keep
@@ -35,10 +34,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   picker, Send destination and base environment values to supported flags.
 
 ### Documentation
-- **Briain cockpit fork workflow specified.** Added the implementation contract and six-sitting
-  plan for project/run selection before startup, explicit cockpit routing, contextual review
-  export, a picker split action, and the local-build/upstream-rebase workflow. README/rebase
-  documentation and operator live acceptance remain deferred to sitting 6.
+- **Cockpit review workflow and operator binding.** README documents project/retained-run
+  selection, base/scope policy, explicit Send, contextual Copy/Send without Enter, and the
+  verified `Ctrl+A` then `d` binding to `persiyanov.reviewr.pick`. Includes primary-checkout
+  build/link/reopen instructions and the downloaded-upstream limitation.
+- **Upstream rebase maintenance.** Added `docs/fork.md` with the adopted `4c09022` boundary,
+  backup/abort/range-diff procedure and isolated, conflict-free rehearsal record. Fetched
+  upstream still equals that boundary. Operator live acceptance remains pending after
+  merge/rebuild; the latency retake is deferred because another heavy job remained active.
 
 ## [0.36.2] — 2026-08-29
 
